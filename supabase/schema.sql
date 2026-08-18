@@ -18,11 +18,18 @@ create table if not exists aluvional.despachos (
 create table if not exists aluvional.produccion (
   id bigint generated always as identity primary key,
   fecha date not null,
+  hora text not null default '00:00',
   turno text not null,
   lts numeric not null default 0,
-  hs numeric not null default 0,
   created_at timestamptz not null default now()
 );
+
+-- Migración: agrega la columna "hora" si la tabla ya existía sin ella
+-- (habilita el filtro por hora en Registro de producción).
+alter table aluvional.produccion add column if not exists hora text not null default '00:00';
+
+-- Migración: elimina la columna "hs" (horas de máquina), ya no se usa.
+alter table aluvional.produccion drop column if exists hs;
 
 -- Novedades CMASS: un texto de novedad por día
 create table if not exists aluvional.novedades_cmass (
