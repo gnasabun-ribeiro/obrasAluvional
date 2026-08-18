@@ -142,6 +142,16 @@ class App extends Component {
       return x.toFixed(1) + "," + y.toFixed(1);
     }).join(" ");
   }
+  // Línea de objetivo sobre el arco del gauge (semicírculo centrado en 90,96 radio 70).
+  gaugeTick(fraction) {
+    const cx = 90, cy = 96, r1 = 55, r2 = 88;
+    const rad = ((180 - Math.max(0, Math.min(1, fraction)) * 180) * Math.PI) / 180;
+    const cos = Math.cos(rad), sin = Math.sin(rad);
+    return {
+      x1: (cx + r1 * cos).toFixed(1), y1: (cy - r1 * sin).toFixed(1),
+      x2: (cx + r2 * cos).toFixed(1), y2: (cy - r2 * sin).toFixed(1)
+    };
+  }
 
   viewModel() {
     const s = this.state;
@@ -210,10 +220,15 @@ class App extends Component {
     const promedioCarga = cantidadCargas ? totalDesp / cantidadCargas : 0;
     const pctCumplimiento = OBJETIVO_TOTAL_CARGA_TN ? (totalDesp / OBJETIVO_TOTAL_CARGA_TN) * 100 : 0;
     const dashArc = (value, max) => (Math.max(0, Math.min(max > 0 ? value / max : 0, 1)) * 220).toFixed(0) + " 220";
+    // Los gauges de "tn" muestran el objetivo a 2/3 del arco (la escala llega a 1.5x el objetivo),
+    // igual que el gauge de % cumplimiento (objetivo=100 sobre una escala de 0 a 150).
+    const escalaTotalObjetivo = OBJETIVO_TOTAL_CARGA_TN * 1.5;
+    const gaugeTargetTick = this.gaugeTick(2 / 3);
 
     const totalTurnoA = despTablero.filter((d) => turnoDe(d.hora) === "Turno A").reduce((a, d) => a + d.carga, 0);
     const totalTurnoB = despTablero.filter((d) => turnoDe(d.hora) === "Turno B").reduce((a, d) => a + d.carga, 0);
     const maxTurno = Math.max(1, totalTurnoA, totalTurnoB);
+    const turnoScaleTop = Math.max(5000, Math.ceil(maxTurno / 5000) * 5000);
 
     const viajesPorFecha = {};
     despTableroTurno.forEach((d) => { viajesPorFecha[d.fecha] = (viajesPorFecha[d.fecha] || 0) + 1; });
@@ -596,13 +611,16 @@ class App extends Component {
       promedioCargaTxt: this.fmt(promedioCarga, 1) + " tn",
       pctCumplimientoTxt: pctCumplimiento.toFixed(2).replace(".", ",") + "%",
       dashCumplimiento: dashArc(Math.min(pctCumplimiento, 150), 150),
-      dashTotalObjetivo: dashArc(totalDesp, OBJETIVO_TOTAL_CARGA_TN),
+      dashTotalObjetivo: dashArc(totalDesp, escalaTotalObjetivo),
       dashPromedioObjetivo: dashArc(promedioCarga, OBJETIVO_PROMEDIO_CARGA_TN),
-      objetivoTotalTxt: this.fmt(OBJETIVO_TOTAL_CARGA_TN / 1000, 0) + " mil",
+      objetivoTotalTxt: this.fmt(escalaTotalObjetivo / 1000, 0) + " mil",
       objetivoPromedioTxt: this.fmt(OBJETIVO_PROMEDIO_CARGA_TN),
+      gaugeTargetTick,
       turnoATxt: this.fmt(totalTurnoA), turnoBTxt: this.fmt(totalTurnoB),
-      turnoAH: ((totalTurnoA / maxTurno) * 100).toFixed(1) + "%",
-      turnoBH: ((totalTurnoB / maxTurno) * 100).toFixed(1) + "%"
+      turnoAH: ((totalTurnoA / turnoScaleTop) * 100).toFixed(1) + "%",
+      turnoBH: ((totalTurnoB / turnoScaleTop) * 100).toFixed(1) + "%",
+      turnoScaleTopTxt: this.fmt(turnoScaleTop / 1000, 0) + " mil",
+      turnoScaleMidTxt: this.fmt(turnoScaleTop / 2000, 0) + " mil"
     };
   }
 
@@ -1083,43 +1101,56 @@ class App extends Component {
               {vm.showCharts && (
                 <div style={css("display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px")}>
                   <div style={css("background:#fff;border:1px solid #E1E1E1;border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:14px")}>
-                    <div style={css("font-size:16px;font-weight:600")}>Carga (tn) por turno</div>
-                    <div style={css("display:flex;align-items:flex-end;gap:26px;height:clamp(170px,26vh,240px);justify-content:center")}>
-                      <div style={css("flex:0 0 74px;display:flex;flex-direction:column;justify-content:flex-end;height:100%;gap:8px;text-align:center")}>
-                        <div style={css("font-size:14px;font-weight:700")}>{vm.turnoATxt}</div>
-                        <div style={css(`background:#1E9BF0;border-radius:4px 4px 0 0;height:${vm.turnoAH}`)}></div>
-                        <div style={css("font-size:12px;color:#5C5C5C")}>Turno A</div>
+                    <div style={css("font-size:16px;font-weight:600")}>Carga (tn) por Turno</div>
+                    <div style={css("display:flex;gap:10px")}>
+                      <div style={css("flex:none;width:40px;display:flex;flex-direction:column;justify-content:space-between;height:clamp(170px,26vh,240px);font-size:11px;color:#7A7A7A;text-align:right")}>
+                        <span>{vm.turnoScaleTopTxt}</span>
+                        <span>{vm.turnoScaleMidTxt}</span>
+                        <span>0 mil</span>
                       </div>
-                      <div style={css("flex:0 0 74px;display:flex;flex-direction:column;justify-content:flex-end;height:100%;gap:8px;text-align:center")}>
-                        <div style={css("font-size:14px;font-weight:700")}>{vm.turnoBTxt}</div>
-                        <div style={css(`background:#1E9BF0;border-radius:4px 4px 0 0;height:${vm.turnoBH}`)}></div>
-                        <div style={css("font-size:12px;color:#5C5C5C")}>Turno B</div>
+                      <div style={css("position:relative;flex:1;display:flex;align-items:flex-end;gap:26px;height:clamp(170px,26vh,240px);justify-content:center")}>
+                        <div style={css("position:absolute;left:0;right:0;top:0;border-top:1px dashed #E4E4E4")}></div>
+                        <div style={css("position:absolute;left:0;right:0;top:50%;border-top:1px dashed #E4E4E4")}></div>
+                        <div style={css("position:absolute;left:0;right:0;bottom:0;border-top:1px dashed #E4E4E4")}></div>
+                        <div style={css("flex:0 0 74px;display:flex;flex-direction:column;justify-content:flex-end;height:100%;gap:8px;text-align:center")}>
+                          <div style={css("font-size:14px;font-weight:700")}>{vm.turnoATxt}</div>
+                          <div style={css(`background:#1E9BF0;border-radius:4px 4px 0 0;height:${vm.turnoAH}`)}></div>
+                          <div style={css("font-size:12px;color:#5C5C5C")}>Turno A</div>
+                        </div>
+                        <div style={css("flex:0 0 74px;display:flex;flex-direction:column;justify-content:flex-end;height:100%;gap:8px;text-align:center")}>
+                          <div style={css("font-size:14px;font-weight:700")}>{vm.turnoBTxt}</div>
+                          <div style={css(`background:#1E9BF0;border-radius:4px 4px 0 0;height:${vm.turnoBH}`)}></div>
+                          <div style={css("font-size:12px;color:#5C5C5C")}>Turno B</div>
+                        </div>
                       </div>
                     </div>
                   </div>
                   <div style={css("background:#fff;border:1px solid #E1E1E1;border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:10px")}>
-                    <div style={css("font-size:15px;font-weight:600")}>% Cumplimiento de carga</div>
+                    <div style={css("font-size:15px;font-weight:600")}>% Cumplimiento de Carga (TN)</div>
                     <svg viewBox="0 0 180 108" style={css("width:100%;max-width:230px;margin:0 auto;display:block")}>
                       <path d="M20 96 A70 70 0 0 1 160 96" fill="none" stroke="#EDEDED" strokeWidth="18" strokeLinecap="butt"></path>
                       <path d="M20 96 A70 70 0 0 1 160 96" fill="none" stroke="#E0605F" strokeWidth="18" strokeDasharray={vm.dashCumplimiento}></path>
+                      <line x1={vm.gaugeTargetTick.x1} y1={vm.gaugeTargetTick.y1} x2={vm.gaugeTargetTick.x2} y2={vm.gaugeTargetTick.y2} stroke="#B01818" strokeWidth="3" strokeLinecap="round"></line>
                       <text x="90" y="92" textAnchor="middle" fontFamily="Segoe UI" fontSize="26" fontWeight="600" fill="#4A4A4A">{vm.pctCumplimientoTxt}</text>
                     </svg>
                     <div style={css("display:flex;justify-content:space-between;font-size:11px;color:#7A7A7A")}><span>0%</span><span>150%</span></div>
                   </div>
                   <div style={css("background:#fff;border:1px solid #E1E1E1;border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:10px")}>
-                    <div style={css("font-size:15px;font-weight:600")}>Carga total vs objetivo (tn)</div>
+                    <div style={css("font-size:15px;font-weight:600")}>Carga total vs Objetivo (TN)</div>
                     <svg viewBox="0 0 180 108" style={css("width:100%;max-width:230px;margin:0 auto;display:block")}>
                       <path d="M20 96 A70 70 0 0 1 160 96" fill="none" stroke="#EDEDED" strokeWidth="18"></path>
                       <path d="M20 96 A70 70 0 0 1 160 96" fill="none" stroke="#E0605F" strokeWidth="18" strokeDasharray={vm.dashTotalObjetivo}></path>
+                      <line x1={vm.gaugeTargetTick.x1} y1={vm.gaugeTargetTick.y1} x2={vm.gaugeTargetTick.x2} y2={vm.gaugeTargetTick.y2} stroke="#B01818" strokeWidth="3" strokeLinecap="round"></line>
                       <text x="90" y="92" textAnchor="middle" fontFamily="Segoe UI" fontSize="24" fontWeight="600" fill="#4A4A4A">{vm.kDesp}</text>
                     </svg>
                     <div style={css("display:flex;justify-content:space-between;font-size:11px;color:#7A7A7A")}><span>0</span><span>{vm.objetivoTotalTxt}</span></div>
                   </div>
                   <div style={css("background:#fff;border:1px solid #E1E1E1;border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:10px")}>
-                    <div style={css("font-size:15px;font-weight:600")}>Carga promedio vs objetivo</div>
+                    <div style={css("font-size:15px;font-weight:600")}>Carga promedio vs Objetivo (TN)</div>
                     <svg viewBox="0 0 180 108" style={css("width:100%;max-width:230px;margin:0 auto;display:block")}>
                       <path d="M20 96 A70 70 0 0 1 160 96" fill="none" stroke="#EDEDED" strokeWidth="18"></path>
                       <path d="M20 96 A70 70 0 0 1 160 96" fill="none" stroke="#1E7B1E" strokeWidth="18" strokeDasharray={vm.dashPromedioObjetivo}></path>
+                      <line x1={vm.gaugeTargetTick.x1} y1={vm.gaugeTargetTick.y1} x2={vm.gaugeTargetTick.x2} y2={vm.gaugeTargetTick.y2} stroke="#B01818" strokeWidth="3" strokeLinecap="round"></line>
                       <text x="90" y="92" textAnchor="middle" fontFamily="Segoe UI" fontSize="26" fontWeight="600" fill="#4A4A4A">{vm.promedioCargaTxt}</text>
                     </svg>
                     <div style={css("display:flex;justify-content:space-between;font-size:11px;color:#7A7A7A")}><span>0</span><span>{vm.objetivoPromedioTxt}</span></div>
