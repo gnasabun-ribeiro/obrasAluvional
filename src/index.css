@@ -1,0 +1,39 @@
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+#root { min-height: 100dvh; }
+body {
+  font-family: 'Segoe UI', 'Segoe UI Web', system-ui, 'Helvetica Neue', sans-serif;
+  color: #141414;
+  background: #ECECEC;
+  -webkit-font-smoothing: antialiased;
+}
+a { color: #1370C4; text-decoration: none; }
+a:hover { color: #0F5798; text-decoration: underline; }
+input, select, button, textarea { font-family: inherit; }
+input:focus, select:focus, textarea:focus { outline: 2px solid #1370C4; outline-offset: -2px; }
+::placeholder { color: #9A9A9A; }
+
+/* Hover treatments — colors only; layout/typography stay inline per element. */
+.hov-blue        { background: #1370C4; }
+.hov-blue:hover        { background: #0F5798; }
+.hov-dark         { background: #111; }
+.hov-dark:hover         { background: #000; }
+.hov-green        { background: #1E7B1E; }
+.hov-green:hover        { background: #166116; }
+.hov-outline      { background: #fff; }
+.hov-outline:hover      { background: #F3F3F3; }
+.hov-danger-icon  { background: transparent; }
+.hov-danger-icon:hover  { background: #FDECEC; }
+.hov-nav          { background: transparent; }
+.hov-nav:hover          { background: #222; }
+.hov-round        { background: #fff; }
+.hov-round:hover        { background: #F2F2F2; }
+.home-card {
+  background: #fff;
+  border: 1px solid #E4E4E4;
+  box-shadow: 0 2px 10px rgba(0,0,0,.05);
+}
+.home-card:hover {
+  box-shadow: 0 8px 24px rgba(0,0,0,.10);
+  border-color: #D0D0D0;
+}
