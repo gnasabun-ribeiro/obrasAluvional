@@ -221,6 +221,15 @@ class App extends Component {
     const mesAbrev = (iso) => { const p = iso.split("-"); return MESES[Number(p[1]) - 1].slice(0, 3) + " " + p[0]; };
     const VIAJES_MAX_ESCALA = 150;
 
+    // Carga por día (tn): totales diarios sobre TODOS los despachos (sin filtro de período),
+    // para la comparativa de barras con línea de promedio, igual que en el informe de origen.
+    const porFechaGlobal = {};
+    s.despachos.forEach((d) => { porFechaGlobal[d.fecha] = (porFechaGlobal[d.fecha] || 0) + d.carga; });
+    const fechasGlobalOrdenadas = Object.keys(porFechaGlobal).sort();
+    const totalesGlobal = fechasGlobalOrdenadas.map((f) => porFechaGlobal[f]);
+    const maxGlobal = Math.max(1, ...totalesGlobal);
+    const avgGlobal = totalesGlobal.length ? totalesGlobal.reduce((a, v) => a + v, 0) / totalesGlobal.length : 0;
+
     const pf = s.pf;
     const toIso = (dmy) => { const p = dmy.split("/"); return p[2] + "-" + p[1] + "-" + p[0]; };
     const partesFiltradas = s.partes
@@ -265,6 +274,14 @@ class App extends Component {
         const i = TABLERO.indexOf(st.screen);
         return { screen: TABLERO[(i + 1) % TABLERO.length] };
       }),
+      isDespachosFocus: screen === "despachosFocus",
+      isCargaFocus: screen === "cargaFocus",
+      goDespachosFocus: this.go("despachosFocus"),
+      goCargaFocus: this.go("cargaFocus"),
+      isFocusScreen: screen === "despachosFocus" || screen === "cargaFocus",
+      focusPagerLabel: (TABLERO.indexOf("kpiAluv") + 1) + " de " + TABLERO.length,
+      focusPrevPage: () => this.setState({ screen: TABLERO[(TABLERO.indexOf("kpiAluv") - 1 + TABLERO.length) % TABLERO.length] }),
+      focusNextPage: () => this.setState({ screen: TABLERO[(TABLERO.indexOf("kpiAluv") + 1) % TABLERO.length] }),
       viajesBars: viajesFechas.map((f) => {
         const n = viajesPorFecha[f];
         const dow = new Date(f + "T00:00:00").getDay();
@@ -433,7 +450,8 @@ class App extends Component {
           : st.screen === "novProd" ? "produccion"
           : st.screen === "novProdNew" ? "novProd"
           : st.screen === "detalle" ? "kpiProd"
-          : st.screen === "estadisticas" ? "despachos" : "home"
+          : st.screen === "estadisticas" ? "despachos"
+          : (st.screen === "despachosFocus" || st.screen === "cargaFocus") ? "kpiAluv" : "home"
       })),
       goDespachos: this.go("despachos"),
       goDespachoNew: this.go("despachoNew"),
@@ -547,6 +565,16 @@ class App extends Component {
       acumPts: this.points(acum, minA, maxA),
       despPts,
       despAreaPts: "0,160 " + despPts + " 320,160",
+      despachoBarras: serieDias.map((x) => ({ h: ((x.desp / maxD) * 100).toFixed(1) + "%", tn: this.fmt(x.desp, 1) })),
+      cargaDiaBarras: fechasGlobalOrdenadas.map((f) => ({
+        h: ((porFechaGlobal[f] / maxGlobal) * 100).toFixed(1) + "%",
+        tn: this.fmt(porFechaGlobal[f]),
+        fecha: diaMes(f)
+      })),
+      cargaDiaAvgPct: ((avgGlobal / maxGlobal) * 100).toFixed(1) + "%",
+      cargaDiaLabelInicio: fechasGlobalOrdenadas.length ? mesAbrev(fechasGlobalOrdenadas[0]) : "—",
+      cargaDiaLabelFin: fechasGlobalOrdenadas.length ? mesAbrev(fechasGlobalOrdenadas[fechasGlobalOrdenadas.length - 1]) : "—",
+      sinCargaDia: fechasGlobalOrdenadas.length === 0,
       primerDia, ultimoDia,
       donutStop: pctProdN.toFixed(2) + "%",
       pctProd: pctProdN.toFixed(2).replace(".", ",") + "%",
@@ -1096,18 +1124,46 @@ class App extends Component {
                     </svg>
                     <div style={css("display:flex;justify-content:space-between;font-size:11px;color:#7A7A7A")}><span>0</span><span>{vm.objetivoPromedioTxt}</span></div>
                   </div>
-                  <div style={css("background:#fff;border:1px solid #E1E1E1;border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:12px;grid-column:1/-1")}>
-                    <div>
-                      <div style={css("font-size:16px;font-weight:600")}>Despachos</div>
-                      <div style={css("font-size:13px;color:#6B6B6B")}>Detalle de tn despachadas</div>
+                  <div style={css("background:#fff;border:1px solid #E1E1E1;border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:12px")}>
+                    <div style={css("display:flex;align-items:flex-start;justify-content:space-between;gap:10px")}>
+                      <div>
+                        <div style={css("font-size:16px;font-weight:600")}>Despachos</div>
+                        <div style={css("font-size:13px;color:#6B6B6B")}>Detalle de tn despachadas</div>
+                      </div>
+                      <button onClick={vm.goDespachosFocus} aria-label="Ver detalle ampliado" className="hov-round" style={css("flex:none;width:32px;height:32px;border-radius:8px;border:1px solid #E1E1E1;cursor:pointer;display:flex;align-items:center;justify-content:center")}>
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#5C5C5C" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 3H5a2 2 0 0 0-2 2v4M15 3h4a2 2 0 0 1 2 2v4M9 21H5a2 2 0 0 1-2-2v-4M15 21h4a2 2 0 0 0 2-2v-4"></path></svg>
+                      </button>
                     </div>
-                    <div style={css("height:clamp(170px,26vh,240px)")}>
-                      <svg viewBox="0 0 320 160" preserveAspectRatio="none" style={css("width:100%;height:100%;display:block")}>
-                        <polygon points={vm.despAreaPts} fill="#BFE0FA"></polygon>
-                        <polyline points={vm.despPts} fill="none" stroke="#1E9BF0" strokeWidth="2" vectorEffect="non-scaling-stroke"></polyline>
-                      </svg>
+                    <div style={css("height:clamp(170px,26vh,240px);display:flex;align-items:flex-end;gap:2px")}>
+                      {vm.despachoBarras.map((b, i) => (
+                        <div key={i} title={b.tn + " tn"} style={css(`flex:1 1 0;min-width:2px;height:${b.h};background:#1E9BF0;border-radius:2px 2px 0 0`)}></div>
+                      ))}
                     </div>
                     <div style={css("display:flex;justify-content:space-between;font-size:11px;color:#6B6B6B")}><span>{vm.primerDia}</span><span>{vm.ultimoDia}</span></div>
+                  </div>
+                  <div style={css("background:#fff;border:1px solid #E1E1E1;border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:12px")}>
+                    <div style={css("display:flex;align-items:flex-start;justify-content:space-between;gap:10px")}>
+                      <div>
+                        <div style={css("font-size:16px;font-weight:600")}>Carga por día (tn)</div>
+                        <div style={css("font-size:13px;color:#6B6B6B")}>Comparativa</div>
+                      </div>
+                      <button onClick={vm.goCargaFocus} aria-label="Ver detalle ampliado" className="hov-round" style={css("flex:none;width:32px;height:32px;border-radius:8px;border:1px solid #E1E1E1;cursor:pointer;display:flex;align-items:center;justify-content:center")}>
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#5C5C5C" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 3H5a2 2 0 0 0-2 2v4M15 3h4a2 2 0 0 1 2 2v4M9 21H5a2 2 0 0 1-2-2v-4M15 21h4a2 2 0 0 0 2-2v-4"></path></svg>
+                      </button>
+                    </div>
+                    {vm.sinCargaDia ? (
+                      <div style={css("padding:24px 0;text-align:center;font-size:14px;color:#7A7A7A")}>Sin cargas registradas.</div>
+                    ) : (
+                      <>
+                        <div style={css("position:relative;height:clamp(170px,26vh,240px);display:flex;align-items:flex-end;gap:1px")}>
+                          <div style={css(`position:absolute;left:0;right:0;bottom:${vm.cargaDiaAvgPct};border-top:2px dashed #3FA34D;pointer-events:none`)}></div>
+                          {vm.cargaDiaBarras.map((b, i) => (
+                            <div key={i} title={b.fecha + ": " + b.tn + " tn"} style={css(`flex:1 1 0;min-width:1px;height:${b.h};background:#FFC800;border-radius:1px 1px 0 0`)}></div>
+                          ))}
+                        </div>
+                        <div style={css("display:flex;justify-content:space-between;font-size:11px;color:#6B6B6B")}><span>{vm.cargaDiaLabelInicio}</span><span>{vm.cargaDiaLabelFin}</span></div>
+                      </>
+                    )}
                   </div>
                 </div>
               )}
@@ -1186,11 +1242,60 @@ class App extends Component {
             </div>
           )}
 
-          {vm.isTablero && (
+          {vm.isDespachosFocus && (
+            <div style={css("background:#fff;border:1px solid #E1E1E1;border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:14px")}>
+              <div style={css("display:flex;align-items:center;gap:18px;flex-wrap:wrap;border-bottom:1px solid #EFEFEF;padding-bottom:10px")}>
+                <button onClick={vm.goKpiAluv} className="hov-round" style={css("flex:none;min-height:36px;padding:0 14px;border:1px solid #D5D5D5;border-radius:8px;font-size:13px;font-weight:600;color:#333;cursor:pointer;display:flex;align-items:center;gap:6px")}>
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#333" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M15 5l-7 7 7 7"></path></svg>
+                  Volver al informe
+                </button>
+                <div style={css("display:flex;gap:18px;font-size:12px;font-weight:700;letter-spacing:.04em;color:#7A7A7A")}>
+                  <span style={css("color:#1370C4;border-bottom:2px solid #1370C4;padding-bottom:10px")}>DESPACHOS</span>
+                  <span>DETALLE DE TN DESPACHADAS</span>
+                </div>
+              </div>
+              <div style={css("height:clamp(320px,60vh,520px);display:flex;align-items:flex-end;gap:2px")}>
+                {vm.despachoBarras.map((b, i) => (
+                  <div key={i} title={b.tn + " tn"} style={css(`flex:1 1 0;min-width:2px;height:${b.h};background:#1E9BF0;border-radius:2px 2px 0 0`)}></div>
+                ))}
+              </div>
+              <div style={css("display:flex;justify-content:space-between;font-size:12px;color:#6B6B6B")}><span>{vm.primerDia}</span><span>{vm.ultimoDia}</span></div>
+            </div>
+          )}
+
+          {vm.isCargaFocus && (
+            <div style={css("background:#fff;border:1px solid #E1E1E1;border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:14px")}>
+              <div style={css("display:flex;align-items:center;gap:18px;flex-wrap:wrap;border-bottom:1px solid #EFEFEF;padding-bottom:10px")}>
+                <button onClick={vm.goKpiAluv} className="hov-round" style={css("flex:none;min-height:36px;padding:0 14px;border:1px solid #D5D5D5;border-radius:8px;font-size:13px;font-weight:600;color:#333;cursor:pointer;display:flex;align-items:center;gap:6px")}>
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#333" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M15 5l-7 7 7 7"></path></svg>
+                  Volver al informe
+                </button>
+                <div style={css("display:flex;gap:18px;font-size:12px;font-weight:700;letter-spacing:.04em;color:#7A7A7A")}>
+                  <span style={css("color:#1370C4;border-bottom:2px solid #1370C4;padding-bottom:10px")}>CARGA POR DÍA (TN)</span>
+                  <span>COMPARATIVA</span>
+                </div>
+              </div>
+              {vm.sinCargaDia ? (
+                <div style={css("padding:40px 0;text-align:center;font-size:14px;color:#7A7A7A")}>Sin cargas registradas.</div>
+              ) : (
+                <>
+                  <div style={css("position:relative;height:clamp(320px,60vh,520px);display:flex;align-items:flex-end;gap:1px")}>
+                    <div style={css(`position:absolute;left:0;right:0;bottom:${vm.cargaDiaAvgPct};border-top:2px dashed #3FA34D;pointer-events:none`)}></div>
+                    {vm.cargaDiaBarras.map((b, i) => (
+                      <div key={i} title={b.fecha + ": " + b.tn + " tn"} style={css(`flex:1 1 0;min-width:1px;height:${b.h};background:#FFC800;border-radius:1px 1px 0 0`)}></div>
+                    ))}
+                  </div>
+                  <div style={css("display:flex;justify-content:space-between;font-size:12px;color:#6B6B6B")}><span>{vm.cargaDiaLabelInicio}</span><span>{vm.cargaDiaLabelFin}</span></div>
+                </>
+              )}
+            </div>
+          )}
+
+          {(vm.isTablero || vm.isFocusScreen) && (
             <div style={css("display:flex;align-items:center;justify-content:center;gap:14px;padding:6px 0 2px")}>
-              <button onClick={vm.prevPage} aria-label="Página anterior" className="hov-round" style={css("width:40px;height:40px;border-radius:50%;border:1px solid #D5D5D5;color:#333;font-size:17px;cursor:pointer")}>‹</button>
-              <div style={css("font-size:14px;color:#4A4A4A;min-width:70px;text-align:center")}>{vm.pagerLabel}</div>
-              <button onClick={vm.nextPage} aria-label="Página siguiente" className="hov-round" style={css("width:40px;height:40px;border-radius:50%;border:1px solid #D5D5D5;color:#333;font-size:17px;cursor:pointer")}>›</button>
+              <button onClick={vm.isFocusScreen ? vm.focusPrevPage : vm.prevPage} aria-label="Página anterior" className="hov-round" style={css("width:40px;height:40px;border-radius:50%;border:1px solid #D5D5D5;color:#333;font-size:17px;cursor:pointer")}>‹</button>
+              <div style={css("font-size:14px;color:#4A4A4A;min-width:70px;text-align:center")}>{vm.isFocusScreen ? vm.focusPagerLabel : vm.pagerLabel}</div>
+              <button onClick={vm.isFocusScreen ? vm.focusNextPage : vm.nextPage} aria-label="Página siguiente" className="hov-round" style={css("width:40px;height:40px;border-radius:50%;border:1px solid #D5D5D5;color:#333;font-size:17px;cursor:pointer")}>›</button>
             </div>
           )}
 

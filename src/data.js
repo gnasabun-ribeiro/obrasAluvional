@@ -13,7 +13,9 @@ export const TITLES = {
   novProdNew: "Nueva novedad de producción",
   viajes: "KPIs Aluvional",
   detalleCargas: "KPIs Aluvional",
-  kpiAluv: "KPIs Aluvional"
+  kpiAluv: "KPIs Aluvional",
+  despachosFocus: "KPIs Aluvional",
+  cargaFocus: "KPIs Aluvional"
 };
 
 export const MESES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
