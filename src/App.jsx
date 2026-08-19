@@ -2,6 +2,8 @@ import { Component } from "react";
 import { TITLES, MESES, TABLERO, OBJETIVO_PROMEDIO_CARGA_TN, OBJETIVO_TOTAL_CARGA_TN } from "./data";
 import { css } from "./utils";
 import { supabase } from "./supabaseClient";
+import DespachosChart from "./DespachosChart";
+import CargaDiaChart from "./CargaDiaChart";
 import logoRibeiro from "./assets/logo-ribeiro.png";
 import despachosImg from "./assets/despachos-illustration.png";
 import produccionImg from "./assets/produccion-illustration.png";
@@ -205,13 +207,14 @@ class App extends Component {
     const totalDesp = serieDias.reduce((a, x) => a + x.desp, 0);
     const pctProdN = totalDesp ? (totalProd / (totalProd + totalDesp)) * 100 : 0;
 
-    const maxD = Math.max(1, ...serieDias.map((x) => x.desp));
-    const despPts = this.points(serieDias.map((x) => x.desp), 0, maxD);
-
     const diaMes = (iso) => {
       if (!iso) return "—";
       const p = iso.split("-");
       return Number(p[2]) + " " + MESES[Number(p[1]) - 1].slice(0, 3) + " " + p[0];
+    };
+    const diaCorto = (iso) => {
+      const p = iso.split("-");
+      return p[2] + " " + MESES[Number(p[1]) - 1].slice(0, 3);
     };
     const primerDia = fechasOrdenadas.length ? diaMes(fechasOrdenadas[0]) : "—";
     const ultimoDia = fechasOrdenadas.length ? diaMes(fechasOrdenadas[fechasOrdenadas.length - 1]) : "—";
@@ -236,14 +239,10 @@ class App extends Component {
     const mesAbrev = (iso) => { const p = iso.split("-"); return MESES[Number(p[1]) - 1].slice(0, 3) + " " + p[0]; };
     const VIAJES_MAX_ESCALA = 150;
 
-    // Carga por día (tn): totales diarios sobre TODOS los despachos (sin filtro de período),
-    // para la comparativa de barras con línea de promedio, igual que en el informe de origen.
-    const porFechaGlobal = {};
-    s.despachos.forEach((d) => { porFechaGlobal[d.fecha] = (porFechaGlobal[d.fecha] || 0) + d.carga; });
-    const fechasGlobalOrdenadas = Object.keys(porFechaGlobal).sort();
-    const totalesGlobal = fechasGlobalOrdenadas.map((f) => porFechaGlobal[f]);
-    const maxGlobal = Math.max(1, ...totalesGlobal);
-    const avgGlobal = totalesGlobal.length ? totalesGlobal.reduce((a, v) => a + v, 0) / totalesGlobal.length : 0;
+    // Carga por día (tn): usa el mismo total diario filtrado por período/turno que "Despachos"
+    // (porFecha/fechasOrdenadas), agregando la línea de promedio.
+    const totalesDias = fechasOrdenadas.map((f) => porFecha[f]);
+    const avgDias = totalesDias.length ? totalesDias.reduce((a, v) => a + v, 0) / totalesDias.length : 0;
 
     const pf = s.pf;
     const toIso = (dmy) => { const p = dmy.split("/"); return p[2] + "-" + p[1] + "-" + p[0]; };
@@ -578,18 +577,10 @@ class App extends Component {
       }),
       acopioPts: this.points(acopio, minA, maxA),
       acumPts: this.points(acum, minA, maxA),
-      despPts,
-      despAreaPts: "0,160 " + despPts + " 320,160",
-      despachoBarras: serieDias.map((x) => ({ h: ((x.desp / maxD) * 100).toFixed(1) + "%", tn: this.fmt(x.desp, 1) })),
-      cargaDiaBarras: fechasGlobalOrdenadas.map((f) => ({
-        h: ((porFechaGlobal[f] / maxGlobal) * 100).toFixed(1) + "%",
-        tn: this.fmt(porFechaGlobal[f]),
-        fecha: diaMes(f)
-      })),
-      cargaDiaAvgPct: ((avgGlobal / maxGlobal) * 100).toFixed(1) + "%",
-      cargaDiaLabelInicio: fechasGlobalOrdenadas.length ? mesAbrev(fechasGlobalOrdenadas[0]) : "—",
-      cargaDiaLabelFin: fechasGlobalOrdenadas.length ? mesAbrev(fechasGlobalOrdenadas[fechasGlobalOrdenadas.length - 1]) : "—",
-      sinCargaDia: fechasGlobalOrdenadas.length === 0,
+      despachoSerie: serieDias.map((x) => ({ dia: diaCorto(x.fecha), tn: Number(x.desp.toFixed(1)) })),
+      cargaDiaSerie: fechasOrdenadas.map((f) => ({ dia: diaCorto(f), tn: Number(porFecha[f].toFixed(1)) })),
+      cargaDiaAvg: Number(avgDias.toFixed(1)),
+      sinCargaDia: fechasOrdenadas.length === 0,
       primerDia, ultimoDia,
       donutStop: pctProdN.toFixed(2) + "%",
       pctProd: pctProdN.toFixed(2).replace(".", ",") + "%",
@@ -1155,6 +1146,10 @@ class App extends Component {
                     </svg>
                     <div style={css("display:flex;justify-content:space-between;font-size:11px;color:#7A7A7A")}><span>0</span><span>{vm.objetivoPromedioTxt}</span></div>
                   </div>
+                </div>
+              )}
+              {vm.showCharts && (
+                <div style={css("display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px")}>
                   <div style={css("background:#fff;border:1px solid #E1E1E1;border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:12px")}>
                     <div style={css("display:flex;align-items:flex-start;justify-content:space-between;gap:10px")}>
                       <div>
@@ -1165,12 +1160,9 @@ class App extends Component {
                         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#5C5C5C" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 3H5a2 2 0 0 0-2 2v4M15 3h4a2 2 0 0 1 2 2v4M9 21H5a2 2 0 0 1-2-2v-4M15 21h4a2 2 0 0 0 2-2v-4"></path></svg>
                       </button>
                     </div>
-                    <div style={css("height:clamp(170px,26vh,240px);display:flex;align-items:flex-end;gap:2px")}>
-                      {vm.despachoBarras.map((b, i) => (
-                        <div key={i} title={b.tn + " tn"} style={css(`flex:1 1 0;min-width:2px;height:${b.h};background:#1E9BF0;border-radius:2px 2px 0 0`)}></div>
-                      ))}
+                    <div style={css("height:clamp(170px,26vh,240px)")}>
+                      <DespachosChart data={vm.despachoSerie} height="100%" />
                     </div>
-                    <div style={css("display:flex;justify-content:space-between;font-size:11px;color:#6B6B6B")}><span>{vm.primerDia}</span><span>{vm.ultimoDia}</span></div>
                   </div>
                   <div style={css("background:#fff;border:1px solid #E1E1E1;border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:12px")}>
                     <div style={css("display:flex;align-items:flex-start;justify-content:space-between;gap:10px")}>
@@ -1185,15 +1177,9 @@ class App extends Component {
                     {vm.sinCargaDia ? (
                       <div style={css("padding:24px 0;text-align:center;font-size:14px;color:#7A7A7A")}>Sin cargas registradas.</div>
                     ) : (
-                      <>
-                        <div style={css("position:relative;height:clamp(170px,26vh,240px);display:flex;align-items:flex-end;gap:1px")}>
-                          <div style={css(`position:absolute;left:0;right:0;bottom:${vm.cargaDiaAvgPct};border-top:2px dashed #3FA34D;pointer-events:none`)}></div>
-                          {vm.cargaDiaBarras.map((b, i) => (
-                            <div key={i} title={b.fecha + ": " + b.tn + " tn"} style={css(`flex:1 1 0;min-width:1px;height:${b.h};background:#FFC800;border-radius:1px 1px 0 0`)}></div>
-                          ))}
-                        </div>
-                        <div style={css("display:flex;justify-content:space-between;font-size:11px;color:#6B6B6B")}><span>{vm.cargaDiaLabelInicio}</span><span>{vm.cargaDiaLabelFin}</span></div>
-                      </>
+                      <div style={css("height:clamp(170px,26vh,240px)")}>
+                        <CargaDiaChart data={vm.cargaDiaSerie} average={vm.cargaDiaAvg} height="100%" />
+                      </div>
                     )}
                   </div>
                 </div>
@@ -1285,12 +1271,9 @@ class App extends Component {
                   <span>DETALLE DE TN DESPACHADAS</span>
                 </div>
               </div>
-              <div style={css("height:clamp(320px,60vh,520px);display:flex;align-items:flex-end;gap:2px")}>
-                {vm.despachoBarras.map((b, i) => (
-                  <div key={i} title={b.tn + " tn"} style={css(`flex:1 1 0;min-width:2px;height:${b.h};background:#1E9BF0;border-radius:2px 2px 0 0`)}></div>
-                ))}
+              <div style={css("height:clamp(320px,60vh,520px)")}>
+                <DespachosChart data={vm.despachoSerie} height="100%" />
               </div>
-              <div style={css("display:flex;justify-content:space-between;font-size:12px;color:#6B6B6B")}><span>{vm.primerDia}</span><span>{vm.ultimoDia}</span></div>
             </div>
           )}
 
@@ -1309,15 +1292,9 @@ class App extends Component {
               {vm.sinCargaDia ? (
                 <div style={css("padding:40px 0;text-align:center;font-size:14px;color:#7A7A7A")}>Sin cargas registradas.</div>
               ) : (
-                <>
-                  <div style={css("position:relative;height:clamp(320px,60vh,520px);display:flex;align-items:flex-end;gap:1px")}>
-                    <div style={css(`position:absolute;left:0;right:0;bottom:${vm.cargaDiaAvgPct};border-top:2px dashed #3FA34D;pointer-events:none`)}></div>
-                    {vm.cargaDiaBarras.map((b, i) => (
-                      <div key={i} title={b.fecha + ": " + b.tn + " tn"} style={css(`flex:1 1 0;min-width:1px;height:${b.h};background:#FFC800;border-radius:1px 1px 0 0`)}></div>
-                    ))}
-                  </div>
-                  <div style={css("display:flex;justify-content:space-between;font-size:12px;color:#6B6B6B")}><span>{vm.cargaDiaLabelInicio}</span><span>{vm.cargaDiaLabelFin}</span></div>
-                </>
+                <div style={css("height:clamp(320px,60vh,520px)")}>
+                  <CargaDiaChart data={vm.cargaDiaSerie} average={vm.cargaDiaAvg} height="100%" />
+                </div>
               )}
             </div>
           )}
