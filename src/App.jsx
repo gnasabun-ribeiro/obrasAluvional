@@ -154,6 +154,39 @@ class App extends Component {
       x2: (cx + r2 * cos).toFixed(1), y2: (cy - r2 * sin).toFixed(1)
     };
   }
+  // Marca sólo picos/valles prominentes (máximo o mínimo dentro de una ventana de varios días)
+  // para no etiquetar cada oscilación día a día; agrupa tramos empatados (p.ej. varios días
+  // seguidos en 0) en una sola marca para señalar los períodos sin cargas.
+  markExtremes(vals) {
+    const n = vals.length;
+    const marks = new Array(n).fill(false);
+    if (!n) return marks;
+    const window = Math.max(2, Math.round(n / 25));
+    const isPeak = new Array(n).fill(false);
+    const isValley = new Array(n).fill(false);
+    for (let i = 0; i < n; i++) {
+      const lo = Math.max(0, i - window), hi = Math.min(n - 1, i + window);
+      let maxV = -Infinity, minV = Infinity;
+      for (let k = lo; k <= hi; k++) {
+        if (vals[k] > maxV) maxV = vals[k];
+        if (vals[k] < minV) minV = vals[k];
+      }
+      if (vals[i] === maxV) isPeak[i] = true;
+      if (vals[i] === minV) isValley[i] = true;
+    }
+    let i = 0;
+    while (i < n) {
+      if (isPeak[i] || isValley[i]) {
+        let j = i;
+        while (j + 1 < n && (isPeak[j + 1] || isValley[j + 1]) && vals[j + 1] === vals[i]) j++;
+        marks[i + Math.floor((j - i) / 2)] = true;
+        i = j + 1;
+      } else i++;
+    }
+    marks[0] = true;
+    marks[n - 1] = true;
+    return marks;
+  }
 
   viewModel() {
     const s = this.state;
@@ -243,6 +276,22 @@ class App extends Component {
     // (porFecha/fechasOrdenadas), agregando la línea de promedio.
     const totalesDias = fechasOrdenadas.map((f) => porFecha[f]);
     const avgDias = totalesDias.length ? totalesDias.reduce((a, v) => a + v, 0) / totalesDias.length : 0;
+
+    // Serie continua día a día (sin saltear fechas sin cargas, se completan en 0)
+    // para que el gráfico muestre también los días sin despachos.
+    const fechasContinuas = [];
+    if (fechasOrdenadas.length) {
+      let cursor = fechasOrdenadas[0];
+      const fin = fechasOrdenadas[fechasOrdenadas.length - 1];
+      while (cursor <= fin) {
+        fechasContinuas.push(cursor);
+        const d = new Date(cursor + "T00:00:00");
+        d.setDate(d.getDate() + 1);
+        cursor = d.toISOString().slice(0, 10);
+      }
+    }
+    const cargaDiaValores = fechasContinuas.map((f) => Number((porFecha[f] || 0).toFixed(1)));
+    const cargaDiaMarks = this.markExtremes(cargaDiaValores);
 
     const pf = s.pf;
     const toIso = (dmy) => { const p = dmy.split("/"); return p[2] + "-" + p[1] + "-" + p[0]; };
@@ -578,7 +627,7 @@ class App extends Component {
       acopioPts: this.points(acopio, minA, maxA),
       acumPts: this.points(acum, minA, maxA),
       despachoSerie: serieDias.map((x) => ({ dia: diaCorto(x.fecha), tn: Number(x.desp.toFixed(1)) })),
-      cargaDiaSerie: fechasOrdenadas.map((f) => ({ dia: diaCorto(f), tn: Number(porFecha[f].toFixed(1)) })),
+      cargaDiaSerie: fechasContinuas.map((f, i) => ({ dia: diaCorto(f), tn: cargaDiaValores[i], showLabel: cargaDiaMarks[i] })),
       cargaDiaAvg: Number(avgDias.toFixed(1)),
       sinCargaDia: fechasOrdenadas.length === 0,
       primerDia, ultimoDia,
