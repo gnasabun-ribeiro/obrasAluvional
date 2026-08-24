@@ -100,8 +100,28 @@ $$;
 revoke execute on function aluvional.tiene_acceso() from public;
 grant execute on function aluvional.tiene_acceso() to authenticated;
 
+-- Migración: distinción de roles dentro de Aluvional (admin vs operador),
+-- usando public.profiles.rol (columna del otro sistema, valores 'admin' /
+-- 'operador'). Los operadores quedan de solo lectura; los admin pueden
+-- agregar/editar/eliminar como antes.
+create or replace function aluvional.es_admin()
+returns boolean
+language sql
+security definer
+stable
+set search_path to 'public'
+as $$
+  select coalesce(
+    (select p.rol = 'admin' from public.profiles p where p.id = auth.uid()),
+    false
+  );
+$$;
+
+revoke execute on function aluvional.es_admin() from public;
+grant execute on function aluvional.es_admin() to authenticated;
+
 -- Row Level Security: cualquier usuario logueado con profiles.aluvional = true
--- puede leer y escribir. Sin distinción de roles por ahora dentro de Aluvional.
+-- puede leer. Escribir (insert/update/delete) requiere además profiles.rol = 'admin'.
 alter table aluvional.despachos enable row level security;
 alter table aluvional.produccion enable row level security;
 alter table aluvional.novedades_cmass enable row level security;
@@ -119,9 +139,19 @@ begin
     execute format('drop policy if exists "insercion operadores" on aluvional.%I', t);
     execute format('drop policy if exists "actualizacion operadores" on aluvional.%I', t);
     execute format('drop policy if exists "eliminacion operadores" on aluvional.%I', t);
-
     execute format('drop policy if exists "acceso aluvional" on aluvional.%I', t);
-    execute format('create policy "acceso aluvional" on aluvional.%I for all to authenticated using (aluvional.tiene_acceso()) with check (aluvional.tiene_acceso())', t);
+
+    execute format('drop policy if exists "lectura aluvional" on aluvional.%I', t);
+    execute format('create policy "lectura aluvional" on aluvional.%I for select to authenticated using (aluvional.tiene_acceso())', t);
+
+    execute format('drop policy if exists "escritura admin aluvional" on aluvional.%I', t);
+    execute format('create policy "escritura admin aluvional" on aluvional.%I for insert to authenticated with check (aluvional.tiene_acceso() and aluvional.es_admin())', t);
+
+    execute format('drop policy if exists "actualizacion admin aluvional" on aluvional.%I', t);
+    execute format('create policy "actualizacion admin aluvional" on aluvional.%I for update to authenticated using (aluvional.tiene_acceso() and aluvional.es_admin()) with check (aluvional.tiene_acceso() and aluvional.es_admin())', t);
+
+    execute format('drop policy if exists "eliminacion admin aluvional" on aluvional.%I', t);
+    execute format('create policy "eliminacion admin aluvional" on aluvional.%I for delete to authenticated using (aluvional.tiene_acceso() and aluvional.es_admin())', t);
   end loop;
 end
 $$;

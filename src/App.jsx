@@ -153,6 +153,8 @@ class App extends Component {
 
   logout = () => { supabase.auth.signOut(); };
 
+  isAdmin = () => !!(this.state.perfil && this.state.perfil.rol === "admin");
+
   async fetchDespachos() {
     let data;
     try {
@@ -462,6 +464,7 @@ class App extends Component {
     return {
       screenTitle: TITLES[screen],
       usuarioLabel: (s.perfil && s.perfil.nombre) || (s.session && s.session.user.email) || "",
+      isAdmin: this.isAdmin(),
       logout: this.logout,
       notHome: screen !== "home",
       isHome: screen === "home",
@@ -542,6 +545,7 @@ class App extends Component {
       setNpTurno: (e) => { const v = e.target.value; this.setState((st) => ({ np: Object.assign({}, st.np, { turno: v }) })); },
       setNpClima: (e) => { const v = e.target.value; this.setState((st) => ({ np: Object.assign({}, st.np, { clima: v }) })); },
       saveNovProd: () => {
+        if (!this.isAdmin()) return;
         const np = this.state.np;
         const filas = NP_EQUIPOS
           .map((eq) => ({ equipo: eq.key, campos: np.equipos[eq.key] }))
@@ -600,6 +604,7 @@ class App extends Component {
       setNnFecha: (e) => { const v = e.target.value; this.setState((st) => ({ nn: Object.assign({}, st.nn, { fecha: v }) })); },
       setNnTexto: (e) => { const v = e.target.value; this.setState((st) => ({ nn: Object.assign({}, st.nn, { texto: v }) })); },
       saveNovedad: () => {
+        if (!this.isAdmin()) return;
         const nn = this.state.nn;
         if (!nn.fecha || !nn.texto) { this.setState({ screen: "novedades" }); return; }
         const texto = nn.texto.toUpperCase();
@@ -637,6 +642,7 @@ class App extends Component {
               self.setState((st) => ({ novTextos: Object.assign({}, st.novTextos, { [key]: v }) }));
             },
             onBlur: (e) => {
+              if (!self.isAdmin()) return;
               const v = e.target.value;
               if (!v) {
                 supabase.from("novedades_cmass").delete().eq("fecha", fechaIso).then(({ error }) => {
@@ -691,6 +697,7 @@ class App extends Component {
         guia: d.guia,
         cargaTxt: this.fmt(d.carga, 1) + " tn",
         onDelete: () => {
+          if (!this.isAdmin()) return;
           this.setState((st) => ({ despachos: st.despachos.filter((x) => x.id !== d.id) }));
           supabase.from("despachos").delete().eq("id", d.id).then(({ error }) => {
             if (error) console.error("delete despacho", error);
@@ -714,6 +721,7 @@ class App extends Component {
             ? "Minutos/balde: " + g.baldes.join(", ") + " (promedio " + this.fmt(avgBalde, 2) + ") → 60min/1h × 4m³/" + this.fmt(avgBalde, 2) + "min × 1,3tn/m³"
             : "Sin mediciones de minutos/balde",
           onDelete: () => {
+            if (!this.isAdmin()) return;
             this.setState((st) => ({ produccion: st.produccion.filter((x) => !g.ids.includes(x.id)) }));
             g.ids.forEach((id) => {
               supabase.from("produccion").delete().eq("id", id).then(({ error }) => {
@@ -737,6 +745,7 @@ class App extends Component {
       setFDate: this.setF("date"), setFHora: this.setF("hora"), setFMin: this.setF("min"),
       setFGuia: this.setF("guia"), setFCarga: this.setF("carga"),
       saveDespacho: () => {
+        if (!this.isAdmin()) return;
         const f = this.state.f;
         if (!f.carga) { this.setState({ screen: "despachos" }); return; }
         const nuevo = {
@@ -761,6 +770,7 @@ class App extends Component {
       setPClima: this.setP("clima"),
       setPB1: this.setP("b1"), setPB2: this.setP("b2"), setPB3: this.setP("b3"),
       saveProduccion: () => {
+        if (!this.isAdmin()) return;
         const p = this.state.p;
         if (!p.date) { this.setState({ screen: "produccion" }); return; }
         const nuevo = {
@@ -943,13 +953,19 @@ class App extends Component {
                     <div key={i} style={css("display:grid;grid-template-columns:90px 170px 1fr;border-bottom:1px solid #EFEFEF;align-items:stretch")}>
                       <div style={css("padding:9px 14px;font-size:13px;text-align:center;border-right:1px solid #EFEFEF;font-variant-numeric:tabular-nums")}>{d.num}</div>
                       <div style={css(`padding:9px 14px;font-size:13px;color:${d.color};border-right:1px solid #EFEFEF`)}>{d.dia}</div>
-                      <input type="text" value={d.novedad} onChange={d.onChange} onBlur={d.onBlur} placeholder="Sin novedades" style={css("border:none;padding:9px 14px;font-size:13px;font-weight:600;text-align:center;text-transform:uppercase;background:transparent;color:#1F1F1F;width:100%")} />
+                      {vm.isAdmin ? (
+                        <input type="text" value={d.novedad} onChange={d.onChange} onBlur={d.onBlur} placeholder="Sin novedades" style={css("border:none;padding:9px 14px;font-size:13px;font-weight:600;text-align:center;text-transform:uppercase;background:transparent;color:#1F1F1F;width:100%")} />
+                      ) : (
+                        <span style={css("padding:9px 14px;font-size:13px;font-weight:600;text-align:center;text-transform:uppercase;color:#1F1F1F;width:100%;display:block")}>{d.novedad || "Sin novedades"}</span>
+                      )}
                     </div>
                   ))}
                 </div>
               </div>
               <div style={css("font-size:12px;color:#7A7A7A")}>Los días con tareas suspendidas quedan registrados en el parte diario.</div>
-              <button onClick={vm.goNovedadNew} className="hov-blue" style={css("width:100%;min-height:48px;border:none;border-radius:8px;color:#fff;font-size:16px;font-weight:600;cursor:pointer")}>+ Agregar novedad</button>
+              {vm.isAdmin && (
+                <button onClick={vm.goNovedadNew} className="hov-blue" style={css("width:100%;min-height:48px;border:none;border-radius:8px;color:#fff;font-size:16px;font-weight:600;cursor:pointer")}>+ Agregar novedad</button>
+              )}
             </div>
           )}
 
@@ -1004,7 +1020,9 @@ class App extends Component {
                       <div style={css("font-size:11px;letter-spacing:.12em;color:#6B6B6B;font-weight:600")}>CARGA</div>
                       <div style={css("background:#FFC800;border-radius:999px;padding:8px 20px;font-weight:400;font-size:20px;min-width:96px")}>{d.cargaTxt}</div>
                     </div>
-                    <button onClick={d.onDelete} aria-label="Eliminar" className="hov-danger-icon" style={css("flex:none;width:44px;height:44px;border-radius:50%;border:none;color:#E23A3A;font-size:22px;cursor:pointer")}>⊗</button>
+                    {vm.isAdmin && (
+                      <button onClick={d.onDelete} aria-label="Eliminar" className="hov-danger-icon" style={css("flex:none;width:44px;height:44px;border-radius:50%;border:none;color:#E23A3A;font-size:22px;cursor:pointer")}>⊗</button>
+                    )}
                   </div>
                 ))}
                 {vm.sinDespachos && (
@@ -1013,7 +1031,9 @@ class App extends Component {
               </div>
               <div style={css("display:flex;flex-direction:column;gap:8px;position:sticky;bottom:61px;padding-top:6px;background:linear-gradient(to top,#ECECEC 60%,rgba(236,236,236,0))")}>
                 <button onClick={vm.goEstadisticas} className="hov-green" style={css("width:100%;min-height:48px;border:none;border-radius:8px;color:#fff;font-size:16px;font-weight:600;cursor:pointer")}>Resumen</button>
-                <button onClick={vm.goDespachoNew} className="hov-blue" style={css("width:100%;min-height:48px;border:none;border-radius:8px;color:#fff;font-size:16px;font-weight:600;cursor:pointer")}>+ Nueva carga</button>
+                {vm.isAdmin && (
+                  <button onClick={vm.goDespachoNew} className="hov-blue" style={css("width:100%;min-height:48px;border:none;border-radius:8px;color:#fff;font-size:16px;font-weight:600;cursor:pointer")}>+ Nueva carga</button>
+                )}
               </div>
             </>
           )}
@@ -1073,7 +1093,9 @@ class App extends Component {
               </div>
               <div style={css("display:flex;flex-direction:column;gap:8px")}>
                 <button onClick={vm.goKpiAluv} className="hov-green" style={css("width:100%;min-height:48px;border:none;border-radius:8px;color:#fff;font-size:16px;font-weight:600;cursor:pointer")}>Estadísticas completas</button>
-                <button onClick={vm.goDespachoNew} className="hov-blue" style={css("width:100%;min-height:48px;border:none;border-radius:8px;color:#fff;font-size:16px;font-weight:600;cursor:pointer")}>+ Nueva carga</button>
+                {vm.isAdmin && (
+                  <button onClick={vm.goDespachoNew} className="hov-blue" style={css("width:100%;min-height:48px;border:none;border-radius:8px;color:#fff;font-size:16px;font-weight:600;cursor:pointer")}>+ Nueva carga</button>
+                )}
               </div>
             </>
           )}
@@ -1117,7 +1139,9 @@ class App extends Component {
                         <div style={css("background:#C9F2C9;border-radius:999px;padding:8px 18px;font-weight:400;font-size:19px;min-width:86px;cursor:help")}>{p.tnhTxt}</div>
                       </div>
                     </div>
-                    <button onClick={p.onDelete} aria-label="Eliminar" className="hov-danger-icon" style={css("flex:none;width:44px;height:44px;border-radius:50%;border:none;color:#E23A3A;font-size:22px;cursor:pointer")}>⊗</button>
+                    {vm.isAdmin && (
+                      <button onClick={p.onDelete} aria-label="Eliminar" className="hov-danger-icon" style={css("flex:none;width:44px;height:44px;border-radius:50%;border:none;color:#E23A3A;font-size:22px;cursor:pointer")}>⊗</button>
+                    )}
                   </div>
                 ))}
                 {vm.sinProduccion && (
@@ -1126,7 +1150,9 @@ class App extends Component {
               </div>
               <div style={css("position:sticky;bottom:61px;padding-top:6px;display:flex;flex-direction:column;gap:8px;background:linear-gradient(to top,#ECECEC 60%,rgba(236,236,236,0))")}>
                 <button onClick={vm.goNovProd} className="hov-green" style={css("width:100%;min-height:48px;border:none;border-radius:8px;color:#fff;font-size:16px;font-weight:600;cursor:pointer")}>Novedades de producción</button>
-                <button onClick={vm.goProduccionNew} className="hov-blue" style={css("width:100%;min-height:48px;border:none;border-radius:8px;color:#fff;font-size:16px;font-weight:600;cursor:pointer")}>+ Nueva carga</button>
+                {vm.isAdmin && (
+                  <button onClick={vm.goProduccionNew} className="hov-blue" style={css("width:100%;min-height:48px;border:none;border-radius:8px;color:#fff;font-size:16px;font-weight:600;cursor:pointer")}>+ Nueva carga</button>
+                )}
               </div>
             </>
           )}
@@ -1637,6 +1663,11 @@ class App extends Component {
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+
+          {vm.isNovProd && vm.isAdmin && (
+            <div style={css("position:sticky;bottom:61px;z-index:15;max-width:1100px;width:100%;margin:0 auto;padding:8px 0;background:#ECECEC;box-shadow:0 -6px 10px -6px rgba(0,0,0,.12)")}>
               <button onClick={vm.goNovProdNew} className="hov-blue" style={css("width:100%;min-height:48px;border:none;border-radius:8px;color:#fff;font-size:16px;font-weight:600;cursor:pointer")}>+ Agregar novedad</button>
             </div>
           )}
