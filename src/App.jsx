@@ -2,6 +2,7 @@ import { Component } from "react";
 import { TITLES, MESES, TABLERO, OBJETIVO_PROMEDIO_CARGA_TN, OBJETIVO_CARGA_DIA_TN } from "./data";
 import { css } from "./utils";
 import { supabase } from "./supabaseClient";
+import Login from "./Login";
 import DespachosChart from "./DespachosChart";
 import CargaDiaChart from "./CargaDiaChart";
 import ViajesChart from "./ViajesChart";
@@ -38,8 +39,23 @@ function daysAgoIso(n) {
   return isoDate(d);
 }
 
+const NP_EQUIPOS = [
+  { key: "IMPACTOR", label: "Impactor" },
+  { key: "ZARANDA 01", label: "Zaranda 01" },
+  { key: "ZARANDA 02", label: "Zaranda 02" }
+];
+function npEquiposVacios() {
+  const equipos = {};
+  NP_EQUIPOS.forEach((eq) => { equipos[eq.key] = { ini: "", fin: "", texto: "" }; });
+  return equipos;
+}
+
 class App extends Component {
   state = {
+    authChecked: false,
+    session: null,
+    perfil: null,
+    accessDenied: false,
     screen: "home",
     desde: "",
     hasta: "",
@@ -53,7 +69,7 @@ class App extends Component {
     produccion: [],
     novMes: "2026-08",
     nn: { fecha: "", texto: "" },
-    np: { fecha: "", turno: "MAÑANA", clima: "SOLEADO", equipo: "IMPACTOR", ini: "", fin: "", texto: "" },
+    np: { fecha: "", turno: "MAÑANA", clima: "SOLEADO", equipos: npEquiposVacios() },
     pf: { desde: daysAgoIso(30), hasta: todayIso(), turno: "Todos", clima: "Todos", equipo: "Todos" },
     partes: [],
     novTextos: {},
@@ -82,9 +98,49 @@ class App extends Component {
 
   componentWillUnmount() {
     if (this._kpiAluvBodyObserver) this._kpiAluvBodyObserver.disconnect();
+    if (this._authSubscription) this._authSubscription.unsubscribe();
   }
 
   componentDidMount() {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!session) {
+        this._dataLoaded = false;
+        this.setState({ session: null, authChecked: true, perfil: null, loading: false });
+        return;
+      }
+      this.setState({ session, authChecked: true, accessDenied: false });
+      this.checkAccesoYCargar(session.user.id);
+    });
+    this._authSubscription = subscription;
+  }
+
+  // public.profiles vive en el schema "public"; el cliente supabase por
+  // defecto apunta al schema "aluvional" (ver supabaseClient.js), así que acá
+  // hay que pedirlo explícitamente con .schema("public").
+  checkAccesoYCargar(userId) {
+    supabase
+      .schema("public")
+      .from("profiles")
+      .select("nombre, rol, aluvional")
+      .eq("id", userId)
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (error) { console.error("fetchPerfil", error); this.setState({ loading: false }); return; }
+        if (!data || !data.aluvional) {
+          this.setState({ accessDenied: true, perfil: null, loading: false });
+          supabase.auth.signOut();
+          return;
+        }
+        this.setState({ perfil: data });
+        if (!this._dataLoaded) {
+          this._dataLoaded = true;
+          this.loadData();
+        }
+      });
+  }
+
+  loadData() {
+    this.setState({ loading: true });
     Promise.all([
       this.fetchDespachos(),
       this.fetchProduccion(),
@@ -94,6 +150,8 @@ class App extends Component {
       this.setState({ despachos, produccion, novTextos, partes, loading: false });
     });
   }
+
+  logout = () => { supabase.auth.signOut(); };
 
   async fetchDespachos() {
     let data;
@@ -403,6 +461,8 @@ class App extends Component {
 
     return {
       screenTitle: TITLES[screen],
+      usuarioLabel: (s.perfil && s.perfil.nombre) || (s.session && s.session.user.email) || "",
+      logout: this.logout,
       notHome: screen !== "home",
       isHome: screen === "home",
       isDespachos: screen === "despachos",
@@ -470,27 +530,35 @@ class App extends Component {
           comentario: e.comentario || "Sin comentarios."
         }))
       })),
-      npFecha: s.np.fecha, npTurno: s.np.turno, npClima: s.np.clima, npEquipo: s.np.equipo,
-      npIni: s.np.ini, npFin: s.np.fin, npTexto: s.np.texto,
+      npFecha: s.np.fecha, npTurno: s.np.turno, npClima: s.np.clima,
+      npEquipos: NP_EQUIPOS.map((eq) => ({
+        key: eq.key, label: eq.label,
+        ini: s.np.equipos[eq.key].ini, fin: s.np.equipos[eq.key].fin, texto: s.np.equipos[eq.key].texto,
+        setIni: (e) => { const v = e.target.value; this.setState((st) => ({ np: Object.assign({}, st.np, { equipos: Object.assign({}, st.np.equipos, { [eq.key]: Object.assign({}, st.np.equipos[eq.key], { ini: v }) }) }) })); },
+        setFin: (e) => { const v = e.target.value; this.setState((st) => ({ np: Object.assign({}, st.np, { equipos: Object.assign({}, st.np.equipos, { [eq.key]: Object.assign({}, st.np.equipos[eq.key], { fin: v }) }) }) })); },
+        setTexto: (e) => { const v = e.target.value; this.setState((st) => ({ np: Object.assign({}, st.np, { equipos: Object.assign({}, st.np.equipos, { [eq.key]: Object.assign({}, st.np.equipos[eq.key], { texto: v }) }) }) })); }
+      })),
       setNpFecha: (e) => { const v = e.target.value; this.setState((st) => ({ np: Object.assign({}, st.np, { fecha: v }) })); },
       setNpTurno: (e) => { const v = e.target.value; this.setState((st) => ({ np: Object.assign({}, st.np, { turno: v }) })); },
       setNpClima: (e) => { const v = e.target.value; this.setState((st) => ({ np: Object.assign({}, st.np, { clima: v }) })); },
-      setNpEquipo: (e) => { const v = e.target.value; this.setState((st) => ({ np: Object.assign({}, st.np, { equipo: v }) })); },
-      setNpIni: (e) => { const v = e.target.value; this.setState((st) => ({ np: Object.assign({}, st.np, { ini: v }) })); },
-      setNpFin: (e) => { const v = e.target.value; this.setState((st) => ({ np: Object.assign({}, st.np, { fin: v }) })); },
-      setNpTexto: (e) => { const v = e.target.value; this.setState((st) => ({ np: Object.assign({}, st.np, { texto: v }) })); },
       saveNovProd: () => {
         const np = this.state.np;
-        if (!np.texto && !np.ini) { this.setState({ screen: "novProd" }); return; }
+        const filas = NP_EQUIPOS
+          .map((eq) => ({ equipo: eq.key, campos: np.equipos[eq.key] }))
+          .filter((f) => f.campos.ini || f.campos.fin || f.campos.texto)
+          .map((f) => ({
+            equipo: f.equipo,
+            inicio: f.campos.ini === "" ? "" : Number(f.campos.ini),
+            fin: f.campos.fin === "" ? "" : Number(f.campos.fin),
+            comentario: f.campos.texto
+          }));
+        if (filas.length === 0) { this.setState({ screen: "novProd" }); return; }
         const fechaIso = np.fecha || todayIso();
         const fechaDmy = fechaIso.split("-").reverse().join("/");
-        const inicio = Number(np.ini) || "";
-        const fin = Number(np.fin) || "";
-        const fila = { equipo: np.equipo, inicio, fin, comentario: np.texto };
 
         this.setState({
           screen: "novProd",
-          np: { fecha: "", turno: "MAÑANA", clima: "SOLEADO", equipo: "IMPACTOR", ini: "", fin: "", texto: "" }
+          np: { fecha: "", turno: "MAÑANA", clima: "SOLEADO", equipos: npEquiposVacios() }
         });
 
         (async () => {
@@ -506,20 +574,20 @@ class App extends Component {
             if (insErr) { console.error("insert parte", insErr); return; }
             parteId = created.id;
           }
-          const { error: eqErr } = await supabase.from("partes_equipos").insert({
-            parte_id: parteId, equipo: np.equipo,
-            inicio: inicio === "" ? null : inicio, fin: fin === "" ? null : fin,
-            comentario: np.texto
-          });
+          const { error: eqErr } = await supabase.from("partes_equipos").insert(filas.map((f) => ({
+            parte_id: parteId, equipo: f.equipo,
+            inicio: f.inicio === "" ? null : f.inicio, fin: f.fin === "" ? null : f.fin,
+            comentario: f.comentario
+          })));
           if (eqErr) { console.error("insert parte equipo", eqErr); return; }
 
           this.setState((st) => {
             const partes = st.partes.slice();
             const idx = partes.findIndex((p) => p.fecha === fechaDmy && p.turno === np.turno);
             if (idx >= 0) {
-              partes[idx] = Object.assign({}, partes[idx], { equipos: partes[idx].equipos.concat([fila]) });
+              partes[idx] = Object.assign({}, partes[idx], { equipos: partes[idx].equipos.concat(filas) });
             } else {
-              partes.unshift({ fecha: fechaDmy, turno: np.turno, clima: np.clima, equipos: [fila] });
+              partes.unshift({ fecha: fechaDmy, turno: np.turno, clima: np.clima, equipos: filas });
             }
             return { partes };
           });
@@ -773,6 +841,16 @@ class App extends Component {
   }
 
   render() {
+    if (!this.state.authChecked) {
+      return (
+        <div style={css("min-height:100dvh;display:flex;align-items:center;justify-content:center;background:#ECECEC;color:#5C5C5C;font-size:15px")}>
+          Cargando…
+        </div>
+      );
+    }
+    if (!this.state.session) {
+      return <Login accessDenied={this.state.accessDenied} />;
+    }
     if (this.state.loading) {
       return (
         <div style={css("min-height:100dvh;display:flex;align-items:center;justify-content:center;background:#ECECEC;color:#5C5C5C;font-size:15px")}>
@@ -788,12 +866,20 @@ class App extends Component {
             <img src={logoRibeiro} alt="Ribeiro" style={css("flex:none;height:clamp(26px,5vw,34px);width:auto;display:block")} />
             <div style={css("width:1px;height:24px;background:rgba(0,0,0,.28)")}></div>
             <div style={css("font-size:clamp(13px,2.6vw,17px);font-weight:500;color:#2A2A2A;overflow:hidden;text-overflow:ellipsis;white-space:nowrap")}>{vm.screenTitle}</div>
-            {vm.notHome && (
-              <button onClick={vm.goBack} aria-label="Volver" className="hov-dark" style={css("flex:none;margin-left:auto;min-height:44px;padding:0 18px 0 14px;border-radius:999px;border:none;color:#FFE500;font-size:15px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:8px;box-shadow:0 2px 8px rgba(0,0,0,.25)")}>
-                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#FFE500" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M15 5l-7 7 7 7"></path></svg>
-                Volver
+            <div style={css("display:flex;align-items:center;gap:10px;margin-left:auto")}>
+              {vm.notHome && (
+                <button onClick={vm.goBack} aria-label="Volver" className="hov-dark" style={css("flex:none;min-height:44px;padding:0 18px 0 14px;border-radius:999px;border:none;color:#FFE500;font-size:15px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:8px;box-shadow:0 2px 8px rgba(0,0,0,.25)")}>
+                  <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#FFE500" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M15 5l-7 7 7 7"></path></svg>
+                  Volver
+                </button>
+              )}
+              <div style={css("flex:none;font-size:13px;font-weight:600;color:#2A2A2A;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap")} title={vm.usuarioLabel}>
+                {vm.usuarioLabel}
+              </div>
+              <button onClick={vm.logout} aria-label="Salir" className="hov-dark" style={css("flex:none;min-height:36px;padding:0 14px;border-radius:999px;border:none;color:#FFE500;font-size:13px;font-weight:600;cursor:pointer")}>
+                Salir
               </button>
-            )}
+            </div>
           </div>
         </header>
 
@@ -1577,23 +1663,23 @@ class App extends Component {
                     <option value="NIEVE">Nieve</option>
                   </select>
                 </label>
-                <label style={css("display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:600;color:#5C5C5C")}>Equipo
-                  <select value={vm.npEquipo} onChange={vm.setNpEquipo} style={css("width:100%;padding:12px;border:1px solid #D9D9D9;border-radius:8px;font-size:16px;background:#fff")}>
-                    <option value="IMPACTOR">Impactor</option>
-                    <option value="ZARANDA 01">Zaranda 01</option>
-                    <option value="ZARANDA 02">Zaranda 02</option>
-                  </select>
-                </label>
-                <label style={css("display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:600;color:#5C5C5C")}>Hs de inicio de turno
-                  <input type="number" value={vm.npIni} onChange={vm.setNpIni} placeholder="0" style={css("width:100%;padding:12px;border:1px solid #D9D9D9;border-radius:8px;font-size:16px;background:#fff")} />
-                </label>
-                <label style={css("display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:600;color:#5C5C5C")}>Hs de fin de turno
-                  <input type="number" value={vm.npFin} onChange={vm.setNpFin} placeholder="0" style={css("width:100%;padding:12px;border:1px solid #D9D9D9;border-radius:8px;font-size:16px;background:#fff")} />
-                </label>
               </div>
-              <label style={css("display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:600;color:#5C5C5C")}>Comentarios
-                <textarea rows={3} value={vm.npTexto} onChange={vm.setNpTexto} placeholder="Ej: Pala fuera de servicio 3 hs por cambio de manguera hidráulica" style={css("width:100%;padding:12px;border:1px solid #D9D9D9;border-radius:8px;font-size:16px;font-family:inherit;background:#fff;resize:vertical")} />
-              </label>
+              {vm.npEquipos.map((eq) => (
+                <div key={eq.key} style={css("border:1px solid #E1E1E1;border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:12px")}>
+                  <div style={css("font-size:13px;font-weight:700;letter-spacing:.04em;color:#1F1F1F")}>{eq.label}</div>
+                  <div style={css("display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px")}>
+                    <label style={css("display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:600;color:#5C5C5C")}>Hs de inicio
+                      <input type="number" value={eq.ini} onChange={eq.setIni} placeholder="0" style={css("width:100%;padding:12px;border:1px solid #D9D9D9;border-radius:8px;font-size:16px;background:#fff")} />
+                    </label>
+                    <label style={css("display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:600;color:#5C5C5C")}>Hs de fin
+                      <input type="number" value={eq.fin} onChange={eq.setFin} placeholder="0" style={css("width:100%;padding:12px;border:1px solid #D9D9D9;border-radius:8px;font-size:16px;background:#fff")} />
+                    </label>
+                  </div>
+                  <label style={css("display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:600;color:#5C5C5C")}>Comentarios
+                    <textarea rows={2} value={eq.texto} onChange={eq.setTexto} placeholder="Ej: Pala fuera de servicio 3 hs por cambio de manguera hidráulica" style={css("width:100%;padding:12px;border:1px solid #D9D9D9;border-radius:8px;font-size:16px;font-family:inherit;background:#fff;resize:vertical")} />
+                  </label>
+                </div>
+              ))}
               <div style={css("display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;border-top:1px solid #EDEDED;padding-top:14px")}>
                 <button onClick={vm.goNovProd} className="hov-outline" style={css("flex:1 1 140px;min-height:48px;border:1px solid #C9C9C9;border-radius:8px;font-size:16px;font-weight:600;cursor:pointer")}>Cancelar</button>
                 <button onClick={vm.saveNovProd} className="hov-dark" style={css("flex:1 1 140px;min-height:48px;border:none;border-radius:8px;color:#FFE500;font-size:16px;font-weight:600;cursor:pointer")}>Enviar</button>
