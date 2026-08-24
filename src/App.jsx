@@ -1,9 +1,10 @@
 import { Component } from "react";
-import { TITLES, MESES, TABLERO, OBJETIVO_PROMEDIO_CARGA_TN, OBJETIVO_TOTAL_CARGA_TN } from "./data";
+import { TITLES, MESES, TABLERO, OBJETIVO_PROMEDIO_CARGA_TN, OBJETIVO_CARGA_DIA_TN } from "./data";
 import { css } from "./utils";
 import { supabase } from "./supabaseClient";
 import DespachosChart from "./DespachosChart";
 import CargaDiaChart from "./CargaDiaChart";
+import ViajesChart from "./ViajesChart";
 import logoRibeiro from "./assets/logo-ribeiro.png";
 import despachosImg from "./assets/despachos-illustration.png";
 import produccionImg from "./assets/produccion-illustration.png";
@@ -25,6 +26,18 @@ async function fetchAllRows(queryFactory) {
   return rows;
 }
 
+function isoDate(d) {
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+}
+function todayIso() {
+  return isoDate(new Date());
+}
+function daysAgoIso(n) {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return isoDate(d);
+}
+
 class App extends Component {
   state = {
     screen: "home",
@@ -41,12 +54,35 @@ class App extends Component {
     novMes: "2026-08",
     nn: { fecha: "", texto: "" },
     np: { fecha: "", turno: "MAÑANA", clima: "SOLEADO", equipo: "IMPACTOR", ini: "", fin: "", texto: "" },
-    pf: { desde: "2026-07-31", hasta: "2026-08-01", turno: "Todos", clima: "Todos", equipo: "Todos" },
+    pf: { desde: daysAgoIso(30), hasta: todayIso(), turno: "Todos", clima: "Todos", equipo: "Todos" },
     partes: [],
     novTextos: {},
-    f: { date: "2026-08-14", hora: "", min: "", guia: "", carga: "" },
-    p: { date: "", hora: "", min: "", turno: "MAÑANA", lts: "", clima: "", b1: "", b2: "", b3: "" }
+    f: { date: todayIso(), hora: "", min: "", guia: "", carga: "" },
+    p: { date: "", turno: "MAÑANA", lts: "", clima: "", b1: "", b2: "", b3: "" },
+    kpiAluvBodyHeight: null
   };
+
+  // El resto de los tableros (páginas 2 a 5) reserva el mismo alto que ocupa el
+  // contenido de "KPIs Aluvional" (página 1), para que el tamaño del dashboard no
+  // salte al pasar de página, igual que el lienzo fijo de un reporte de Power BI.
+  setKpiAluvBodyRef = (el) => {
+    if (this._kpiAluvBodyObserver) {
+      this._kpiAluvBodyObserver.disconnect();
+      this._kpiAluvBodyObserver = null;
+    }
+    if (!el) return;
+    const measure = () => {
+      const h = Math.round(el.getBoundingClientRect().height);
+      if (h && h !== this.state.kpiAluvBodyHeight) this.setState({ kpiAluvBodyHeight: h });
+    };
+    measure();
+    this._kpiAluvBodyObserver = new ResizeObserver(measure);
+    this._kpiAluvBodyObserver.observe(el);
+  };
+
+  componentWillUnmount() {
+    if (this._kpiAluvBodyObserver) this._kpiAluvBodyObserver.disconnect();
+  }
 
   componentDidMount() {
     Promise.all([
@@ -79,7 +115,12 @@ class App extends Component {
       );
     } catch (error) { console.error("fetchProduccion", error); return []; }
     return data.map((p) => ({
-      id: p.id, fecha: p.fecha, hora: p.hora, turno: p.turno, lts: Number(p.lts)
+      id: p.id, fecha: p.fecha, turno: p.turno,
+      lts: p.lts === null ? null : Number(p.lts),
+      clima: p.clima || "",
+      b1: p.b1 === null ? null : Number(p.b1),
+      b2: p.b2 === null ? null : Number(p.b2),
+      b3: p.b3 === null ? null : Number(p.b3)
     }));
   }
 
@@ -202,10 +243,27 @@ class App extends Component {
     });
     const prods = s.produccion.filter((p) => {
       if (s.turnoProd !== "Todos" && p.turno !== s.turnoProd) return false;
-      const pDT = p.fecha + " " + (p.hora || "00:00");
-      if (s.desde && pDT < s.desde + " " + (s.horaDesde || "00") + ":00") return false;
-      if (s.hasta && pDT > s.hasta + " " + (s.horaHasta || "23") + ":59") return false;
+      if (s.desde && p.fecha < s.desde) return false;
+      if (s.hasta && p.fecha > s.hasta) return false;
       return true;
+    });
+
+    // Agrupa por fecha+turno: los datos históricos vienen repartidos en varios
+    // registros (hasta 3 tomas de minutos/balde por registro), pero solo debe
+    // haber un valor de tn/h por turno, promediando todas sus tomas.
+    const prodGrupos = [];
+    const prodGrupoPorClave = {};
+    prods.forEach((p) => {
+      const clave = p.fecha + "|" + p.turno;
+      if (!(clave in prodGrupoPorClave)) {
+        prodGrupoPorClave[clave] = prodGrupos.length;
+        prodGrupos.push({ fecha: p.fecha, turno: p.turno, climas: [], baldes: [], ltsList: [], ids: [] });
+      }
+      const g = prodGrupos[prodGrupoPorClave[clave]];
+      if (p.clima) g.climas.push(p.clima);
+      [p.b1, p.b2, p.b3].forEach((v) => { if (v !== null) g.baldes.push(v); });
+      if (p.lts !== null) g.ltsList.push(p.lts);
+      g.ids.push(p.id);
     });
 
     const totalTn = desps.reduce((a, d) => a + d.carga, 0);
@@ -254,11 +312,21 @@ class App extends Component {
 
     const cantidadCargas = despTableroTurno.length;
     const promedioCarga = cantidadCargas ? totalDesp / cantidadCargas : 0;
-    const pctCumplimiento = OBJETIVO_TOTAL_CARGA_TN ? (totalDesp / OBJETIVO_TOTAL_CARGA_TN) * 100 : 0;
+    // El objetivo de carga total es 3.150 tn/día (100% en un solo día, ver gauge de
+    // % cumplimiento); si el período filtrado abarca más de un día, se multiplica por
+    // la cantidad de días del período (Período desde/hasta), no por los días con datos.
+    const diasEnPeriodo = (desdeIso, hastaIso) => {
+      if (!desdeIso || !hastaIso) return 1;
+      const aIso = (iso) => { const [y, m, d] = iso.split("-").map(Number); return Date.UTC(y, m - 1, d); };
+      return Math.max(1, Math.round((aIso(hastaIso) - aIso(desdeIso)) / 86400000) + 1);
+    };
+    const cantidadDiasFiltrados = diasEnPeriodo(s.desde, s.hasta);
+    const objetivoTotalCargaTn = OBJETIVO_CARGA_DIA_TN * cantidadDiasFiltrados;
+    const pctCumplimiento = objetivoTotalCargaTn ? (totalDesp / objetivoTotalCargaTn) * 100 : 0;
     const dashArc = (value, max) => (Math.max(0, Math.min(max > 0 ? value / max : 0, 1)) * 220).toFixed(0) + " 220";
     // Los gauges de "tn" muestran el objetivo a 2/3 del arco (la escala llega a 1.5x el objetivo),
     // igual que el gauge de % cumplimiento (objetivo=100 sobre una escala de 0 a 150).
-    const escalaTotalObjetivo = OBJETIVO_TOTAL_CARGA_TN * 1.5;
+    const escalaTotalObjetivo = objetivoTotalCargaTn * 1.5;
     const gaugeTargetTick = this.gaugeTick(2 / 3);
 
     const totalTurnoA = despTablero.filter((d) => turnoDe(d.hora) === "Turno A").reduce((a, d) => a + d.carga, 0);
@@ -269,13 +337,6 @@ class App extends Component {
     const viajesPorFecha = {};
     despTableroTurno.forEach((d) => { viajesPorFecha[d.fecha] = (viajesPorFecha[d.fecha] || 0) + 1; });
     const viajesFechas = Object.keys(viajesPorFecha).sort();
-    const mesAbrev = (iso) => { const p = iso.split("-"); return MESES[Number(p[1]) - 1].slice(0, 3) + " " + p[0]; };
-    const VIAJES_MAX_ESCALA = 150;
-
-    // Carga por día (tn): usa el mismo total diario filtrado por período/turno que "Despachos"
-    // (porFecha/fechasOrdenadas), agregando la línea de promedio.
-    const totalesDias = fechasOrdenadas.map((f) => porFecha[f]);
-    const avgDias = totalesDias.length ? totalesDias.reduce((a, v) => a + v, 0) / totalesDias.length : 0;
 
     // Serie continua día a día (sin saltear fechas sin cargas, se completan en 0)
     // para que el gráfico muestre también los días sin despachos.
@@ -292,6 +353,37 @@ class App extends Component {
     }
     const cargaDiaValores = fechasContinuas.map((f) => Number((porFecha[f] || 0).toFixed(1)));
     const cargaDiaMarks = this.markExtremes(cargaDiaValores);
+
+    // Viajes por día: serie continua (incluye días en 0) para que el eje de fechas no salte,
+    // con picos/valles marcados igual que en "Carga por día" para no saturar el gráfico de números.
+    const VIAJES_REFERENCIA = 50;
+    const viajesDiaValores = fechasContinuas.map((f) => viajesPorFecha[f] || 0);
+    const viajesDiaMarks = this.markExtremes(viajesDiaValores);
+    const viajesSerie = fechasContinuas.map((f, i) => {
+      const dow = new Date(f + "T00:00:00").getDay();
+      return { dia: diaCorto(f), viajes: viajesDiaValores[i], finde: dow === 0 || dow === 6, showLabel: viajesDiaMarks[i] };
+    });
+
+    // Despachos (detalle de tn despachadas): igual que en el informe original, agrupado por
+    // fecha + hora (no por día completo) para conservar el detalle intradía de cada pico/valle.
+    const porFechaHora = {};
+    despTableroTurno.forEach((d) => {
+      const hh = (d.hora || "00").slice(0, 2);
+      const key = d.fecha + " " + hh;
+      const cur = porFechaHora[key] || { tn: 0, viajes: 0 };
+      cur.tn += d.carga;
+      cur.viajes += 1;
+      porFechaHora[key] = cur;
+    });
+    const horasSerie = [];
+    fechasContinuas.forEach((f) => {
+      for (let h = 0; h < 24; h++) {
+        const hh = String(h).padStart(2, "0");
+        const bucket = porFechaHora[f + " " + hh];
+        horasSerie.push({ fecha: f, tn: bucket ? Number(bucket.tn.toFixed(1)) : 0, viajes: bucket ? bucket.viajes : 0 });
+      }
+    });
+    const horasMarks = this.markExtremes(horasSerie.map((x) => x.tn));
 
     const pf = s.pf;
     const toIso = (dmy) => { const p = dmy.split("/"); return p[2] + "-" + p[1] + "-" + p[0]; };
@@ -328,6 +420,7 @@ class App extends Component {
       goViajes: this.go("viajes"),
       goDetalleCargas: this.go("detalleCargas"),
       isTablero: TABLERO.indexOf(screen) >= 0,
+      tableroBodyMinHeight: s.kpiAluvBodyHeight || 640,
       pagerLabel: (TABLERO.indexOf(screen) + 1) + " de 5",
       prevPage: () => this.setState((st) => {
         const i = TABLERO.indexOf(st.screen);
@@ -345,20 +438,9 @@ class App extends Component {
       focusPagerLabel: (TABLERO.indexOf("kpiAluv") + 1) + " de " + TABLERO.length,
       focusPrevPage: () => this.setState({ screen: TABLERO[(TABLERO.indexOf("kpiAluv") - 1 + TABLERO.length) % TABLERO.length] }),
       focusNextPage: () => this.setState({ screen: TABLERO[(TABLERO.indexOf("kpiAluv") + 1) % TABLERO.length] }),
-      viajesBars: viajesFechas.map((f) => {
-        const n = viajesPorFecha[f];
-        const dow = new Date(f + "T00:00:00").getDay();
-        const finde = dow === 0 || dow === 6;
-        return {
-          h: ((Math.min(n, VIAJES_MAX_ESCALA) / VIAJES_MAX_ESCALA) * 100).toFixed(1) + "%",
-          color: finde ? "#2A2A2A" : "#FFC800",
-          label: n + " viajes"
-        };
-      }),
+      viajesSerie,
+      viajesReferencia: VIAJES_REFERENCIA,
       sinViajes: viajesFechas.length === 0,
-      viajesLabelInicio: viajesFechas.length ? mesAbrev(viajesFechas[0]) : "—",
-      viajesLabelMedio: viajesFechas.length ? mesAbrev(viajesFechas[Math.floor((viajesFechas.length - 1) / 2)]) : "—",
-      viajesLabelFin: viajesFechas.length ? mesAbrev(viajesFechas[viajesFechas.length - 1]) : "—",
       cargas: despTableroTurno
         .slice()
         .sort((a, b) => (b.fecha + b.hora).localeCompare(a.fecha + a.hora))
@@ -400,7 +482,7 @@ class App extends Component {
       saveNovProd: () => {
         const np = this.state.np;
         if (!np.texto && !np.ini) { this.setState({ screen: "novProd" }); return; }
-        const fechaIso = np.fecha || "2026-08-14";
+        const fechaIso = np.fecha || todayIso();
         const fechaDmy = fechaIso.split("-").reverse().join("/");
         const inicio = Number(np.ini) || "";
         const fin = Number(np.fin) || "";
@@ -550,19 +632,30 @@ class App extends Component {
       sinDespachos: desps.length === 0,
       turnoProd: s.turnoProd,
       setTurnoProd: (e) => this.setState({ turnoProd: e.target.value }),
-      produccionFiltrada: prods.map((p) => ({
-        fechaTxt: this.fechaTxt(p.fecha),
-        hora: p.hora,
-        turno: p.turno,
-        ltsTxt: p.lts + " lts",
-        onDelete: () => {
-          this.setState((st) => ({ produccion: st.produccion.filter((x) => x.id !== p.id) }));
-          supabase.from("produccion").delete().eq("id", p.id).then(({ error }) => {
-            if (error) console.error("delete produccion", error);
-          });
-        }
-      })),
-      sinProduccion: prods.length === 0,
+      produccionFiltrada: prodGrupos.map((g) => {
+        const avgBalde = g.baldes.length ? g.baldes.reduce((a, b) => a + b, 0) / g.baldes.length : null;
+        const tnh = avgBalde ? (60 / avgBalde) * 4 * 1.3 : null;
+        return {
+          fechaTxt: this.fechaTxt(g.fecha),
+          turno: g.turno,
+          clima: [...new Set(g.climas)].join("/"),
+          ltsTxt: g.ltsList.length ? this.fmt(g.ltsList.reduce((a, b) => a + b, 0), 1) + " lts" : "—",
+          baldeTxt: g.baldes.length ? g.baldes.join(" / ") : "—",
+          tnhTxt: tnh !== null ? this.fmt(tnh, 1) + " tn/h" : "—",
+          tnhTitle: g.baldes.length
+            ? "Minutos/balde: " + g.baldes.join(", ") + " (promedio " + this.fmt(avgBalde, 2) + ") → 60min/1h × 4m³/" + this.fmt(avgBalde, 2) + "min × 1,3tn/m³"
+            : "Sin mediciones de minutos/balde",
+          onDelete: () => {
+            this.setState((st) => ({ produccion: st.produccion.filter((x) => !g.ids.includes(x.id)) }));
+            g.ids.forEach((id) => {
+              supabase.from("produccion").delete().eq("id", id).then(({ error }) => {
+                if (error) console.error("delete produccion", error);
+              });
+            });
+          }
+        };
+      }),
+      sinProduccion: prodGrupos.length === 0,
 
       hoyTn: this.fmt(totalTn, 1),
       hoyViajes: desps.length,
@@ -593,24 +686,34 @@ class App extends Component {
         });
       },
 
-      pDate: s.p.date, pHora: s.p.hora, pMin: s.p.min, pTurno: s.p.turno, pLts: s.p.lts,
-      setPHora: this.setP("hora"), setPMin: this.setP("min"), setPTurno: this.setP("turno"),
+      pDate: s.p.date, pTurno: s.p.turno, pLts: s.p.lts,
+      setPTurno: this.setP("turno"),
       pClima: s.p.clima, pB1: s.p.b1, pB2: s.p.b2, pB3: s.p.b3,
       setPDate: this.setP("date"), setPLts: this.setP("lts"),
       setPClima: this.setP("clima"),
       setPB1: this.setP("b1"), setPB2: this.setP("b2"), setPB3: this.setP("b3"),
       saveProduccion: () => {
         const p = this.state.p;
-        if (!p.lts) { this.setState({ screen: "produccion" }); return; }
+        if (!p.date) { this.setState({ screen: "produccion" }); return; }
         const nuevo = {
-          fecha: p.date || "2026-08-14", hora: (p.hora || "00") + ":" + String(p.min || "00").padStart(2, "0"),
-          turno: p.turno, lts: Number(p.lts || 0)
+          fecha: p.date,
+          turno: p.turno, lts: p.lts === "" ? null : Number(p.lts),
+          clima: p.clima || null,
+          b1: p.b1 === "" ? null : Number(p.b1),
+          b2: p.b2 === "" ? null : Number(p.b2),
+          b3: p.b3 === "" ? null : Number(p.b3)
         };
-        this.setState({ screen: "produccion", p: { date: "", hora: "", min: "", turno: "MAÑANA", lts: "", clima: "", b1: "", b2: "", b3: "" } });
+        this.setState({ screen: "produccion", p: { date: "", turno: "MAÑANA", lts: "", clima: "", b1: "", b2: "", b3: "" } });
         supabase.from("produccion").insert(nuevo).select().single().then(({ data, error }) => {
           if (error) { console.error("insert produccion", error); return; }
           this.setState((st) => ({
-            produccion: [{ id: data.id, fecha: data.fecha, hora: data.hora, turno: data.turno, lts: Number(data.lts) }].concat(st.produccion)
+            produccion: [{
+              id: data.id, fecha: data.fecha, turno: data.turno,
+              lts: data.lts === null ? null : Number(data.lts), clima: data.clima || "",
+              b1: data.b1 === null ? null : Number(data.b1),
+              b2: data.b2 === null ? null : Number(data.b2),
+              b3: data.b3 === null ? null : Number(data.b3)
+            }].concat(st.produccion)
           }));
         });
       },
@@ -626,9 +729,14 @@ class App extends Component {
       }),
       acopioPts: this.points(acopio, minA, maxA),
       acumPts: this.points(acum, minA, maxA),
-      despachoSerie: serieDias.map((x) => ({ dia: diaCorto(x.fecha), tn: Number(x.desp.toFixed(1)) })),
+      despachoSerie: horasSerie.map((x, i) => ({
+        idx: i, dia: diaCorto(x.fecha), tn: x.tn, viajes: x.viajes, showLabel: horasMarks[i]
+      })),
+      despachoDayTicks: horasSerie.reduce((acc, x, i) => {
+        if (i % 24 === 0) acc.push({ idx: i, label: diaCorto(x.fecha) });
+        return acc;
+      }, []),
       cargaDiaSerie: fechasContinuas.map((f, i) => ({ dia: diaCorto(f), tn: cargaDiaValores[i], showLabel: cargaDiaMarks[i] })),
-      cargaDiaAvg: Number(avgDias.toFixed(1)),
       sinCargaDia: fechasOrdenadas.length === 0,
       primerDia, ultimoDia,
       donutStop: pctProdN.toFixed(2) + "%",
@@ -817,7 +925,7 @@ class App extends Component {
                   <div style={css("background:#fff;border:1px dashed #CFCFCF;border-radius:10px;padding:34px;text-align:center;color:#7A7A7A;font-size:15px")}>Sin cargas en el período seleccionado.</div>
                 )}
               </div>
-              <div style={css("display:flex;flex-direction:column;gap:8px;position:sticky;bottom:0;padding-top:6px;background:linear-gradient(to top,#ECECEC 60%,rgba(236,236,236,0))")}>
+              <div style={css("display:flex;flex-direction:column;gap:8px;position:sticky;bottom:61px;padding-top:6px;background:linear-gradient(to top,#ECECEC 60%,rgba(236,236,236,0))")}>
                 <button onClick={vm.goEstadisticas} className="hov-green" style={css("width:100%;min-height:48px;border:none;border-radius:8px;color:#fff;font-size:16px;font-weight:600;cursor:pointer")}>Resumen</button>
                 <button onClick={vm.goDespachoNew} className="hov-blue" style={css("width:100%;min-height:48px;border:none;border-radius:8px;color:#fff;font-size:16px;font-weight:600;cursor:pointer")}>+ Nueva carga</button>
               </div>
@@ -887,21 +995,11 @@ class App extends Component {
           {vm.isProduccion && (
             <>
               <div style={css("background:#fff;border:1px solid #E1E1E1;border-radius:10px;padding:14px;display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px 14px")}>
-                <label style={css("display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:600;color:#5C5C5C")}>Fecha y hora de inicio
-                  <div style={css("display:flex;gap:6px")}>
-                    <input type="date" value={vm.desde} onChange={vm.setDesde} style={css("flex:1;min-width:0;padding:11px 12px;border:1px solid #D9D9D9;border-radius:8px;font-size:15px;background:#F7F7F7")} />
-                    <select value={vm.horaDesde} onChange={vm.setHoraDesde} style={css("padding:11px 8px;border:1px solid #D9D9D9;border-radius:8px;font-size:15px;background:#F7F7F7")}>
-                      {vm.horas.map((h) => (<option key={h} value={h}>{h}:00</option>))}
-                    </select>
-                  </div>
+                <label style={css("display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:600;color:#5C5C5C")}>Fecha desde
+                  <input type="date" value={vm.desde} onChange={vm.setDesde} style={css("width:100%;padding:11px 12px;border:1px solid #D9D9D9;border-radius:8px;font-size:15px;background:#F7F7F7")} />
                 </label>
-                <label style={css("display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:600;color:#5C5C5C")}>Fecha y hora de fin
-                  <div style={css("display:flex;gap:6px")}>
-                    <input type="date" value={vm.hasta} onChange={vm.setHasta} style={css("flex:1;min-width:0;padding:11px 12px;border:1px solid #D9D9D9;border-radius:8px;font-size:15px;background:#F7F7F7")} />
-                    <select value={vm.horaHasta} onChange={vm.setHoraHasta} style={css("padding:11px 8px;border:1px solid #D9D9D9;border-radius:8px;font-size:15px;background:#F7F7F7")}>
-                      {vm.horas.map((h) => (<option key={h} value={h}>{h}:00</option>))}
-                    </select>
-                  </div>
+                <label style={css("display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:600;color:#5C5C5C")}>Fecha hasta
+                  <input type="date" value={vm.hasta} onChange={vm.setHasta} style={css("width:100%;padding:11px 12px;border:1px solid #D9D9D9;border-radius:8px;font-size:15px;background:#F7F7F7")} />
                 </label>
                 <label style={css("display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:600;color:#5C5C5C")}>Turno
                   <select value={vm.turnoProd} onChange={vm.setTurnoProd} style={css("width:100%;padding:11px 12px;border:1px solid #D9D9D9;border-radius:8px;font-size:15px;background:#F7F7F7")}>
@@ -915,13 +1013,22 @@ class App extends Component {
                 {vm.produccionFiltrada.map((p, i) => (
                   <div key={i} style={css("background:#fff;border:1px solid #E1E1E1;border-left:5px solid #1370C4;border-radius:10px;padding:12px 14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap")}>
                     <div style={css("flex:1 1 170px;min-width:140px;display:flex;flex-direction:column;gap:5px;align-items:flex-start")}>
-                      <div style={css("font-weight:600;font-size:15px")}>{p.fechaTxt} · {p.hora}</div>
+                      <div style={css("font-weight:600;font-size:15px")}>{p.fechaTxt}</div>
+                      {p.clima && (<span style={css("font-size:12px;color:#6B6B6B")}>{p.clima}</span>)}
                       <span style={css("background:#111;color:#FFE500;border-radius:999px;padding:3px 11px;font-size:11px;font-weight:600;letter-spacing:.06em")}>{p.turno}</span>
                     </div>
                     <div style={css("display:flex;gap:10px;flex-wrap:wrap")}>
                       <div style={css("text-align:center")}>
                         <div style={css("font-size:11px;letter-spacing:.1em;color:#6B6B6B;font-weight:600")}>LTS COMB</div>
                         <div style={css("background:#FFC800;border-radius:999px;padding:8px 18px;font-weight:400;font-size:19px;min-width:86px")}>{p.ltsTxt}</div>
+                      </div>
+                      <div style={css("text-align:center")}>
+                        <div style={css("font-size:11px;letter-spacing:.1em;color:#6B6B6B;font-weight:600")}>MIN/BALDE</div>
+                        <div style={css("background:#EDEDED;border-radius:999px;padding:8px 18px;font-weight:400;font-size:19px;min-width:86px")}>{p.baldeTxt}</div>
+                      </div>
+                      <div style={css("text-align:center")} title={p.tnhTitle}>
+                        <div style={css("font-size:11px;letter-spacing:.1em;color:#6B6B6B;font-weight:600")}>TN/H</div>
+                        <div style={css("background:#C9F2C9;border-radius:999px;padding:8px 18px;font-weight:400;font-size:19px;min-width:86px;cursor:help")}>{p.tnhTxt}</div>
                       </div>
                     </div>
                     <button onClick={p.onDelete} aria-label="Eliminar" className="hov-danger-icon" style={css("flex:none;width:44px;height:44px;border-radius:50%;border:none;color:#E23A3A;font-size:22px;cursor:pointer")}>⊗</button>
@@ -931,7 +1038,7 @@ class App extends Component {
                   <div style={css("background:#fff;border:1px dashed #CFCFCF;border-radius:10px;padding:34px;text-align:center;color:#7A7A7A;font-size:15px")}>Sin registros de producción.</div>
                 )}
               </div>
-              <div style={css("position:sticky;bottom:0;padding-top:6px;display:flex;flex-direction:column;gap:8px;background:linear-gradient(to top,#ECECEC 60%,rgba(236,236,236,0))")}>
+              <div style={css("position:sticky;bottom:61px;padding-top:6px;display:flex;flex-direction:column;gap:8px;background:linear-gradient(to top,#ECECEC 60%,rgba(236,236,236,0))")}>
                 <button onClick={vm.goNovProd} className="hov-green" style={css("width:100%;min-height:48px;border:none;border-radius:8px;color:#fff;font-size:16px;font-weight:600;cursor:pointer")}>Novedades de producción</button>
                 <button onClick={vm.goProduccionNew} className="hov-blue" style={css("width:100%;min-height:48px;border:none;border-radius:8px;color:#fff;font-size:16px;font-weight:600;cursor:pointer")}>+ Nueva carga</button>
               </div>
@@ -943,15 +1050,6 @@ class App extends Component {
               <div style={css("display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px")}>
                 <label style={css("display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:600;color:#5C5C5C")}>Fecha
                   <input type="date" value={vm.pDate} onChange={vm.setPDate} style={css("width:100%;padding:12px;border:1px solid #D9D9D9;border-radius:8px;font-size:16px;background:#fff")} />
-                </label>
-                <label style={css("display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:600;color:#5C5C5C")}>Hora
-                  <select value={vm.pHora} onChange={vm.setPHora} style={css("width:100%;padding:12px;border:1px solid #D9D9D9;border-radius:8px;font-size:16px;background:#fff")}>
-                    <option value="">Seleccionar…</option>
-                    {vm.horas.map((h) => (<option key={h} value={h}>{h}</option>))}
-                  </select>
-                </label>
-                <label style={css("display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:600;color:#5C5C5C")}>Minutos
-                  <input type="number" min="0" max="59" placeholder="0" value={vm.pMin} onChange={vm.setPMin} style={css("width:100%;padding:12px;border:1px solid #D9D9D9;border-radius:8px;font-size:16px;background:#fff")} />
                 </label>
                 <label style={css("display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:600;color:#5C5C5C")}>Turno
                   <select value={vm.pTurno} onChange={vm.setPTurno} style={css("width:100%;padding:12px;border:1px solid #D9D9D9;border-radius:8px;font-size:16px;background:#fff")}>
@@ -1012,6 +1110,7 @@ class App extends Component {
                   </select>
                 </label>
               </div>
+              <div style={css(`display:flex;flex-direction:column;gap:12px;height:${vm.tableroBodyMinHeight}px`)}>
               <div style={css("display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px")}>
                 <div style={css("background:#fff;border:1px solid #E1E1E1;border-radius:10px;padding:18px;text-align:center")}>
                   <div style={css("font-size:clamp(32px,7vw,44px);font-weight:300;line-height:1")}>{vm.kProd}</div>
@@ -1027,14 +1126,14 @@ class App extends Component {
                 </div>
               </div>
               {vm.showCharts && (
-                <div style={css("display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px")}>
+                <div style={css("display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));grid-auto-rows:1fr;gap:12px;flex:1;min-height:0")}>
                   <div style={css("background:#fff;border:1px solid #E1E1E1;border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:14px;overflow:hidden")}>
                     <div style={css("font-size:16px;font-weight:600")}>Despacho y producción por fecha</div>
                     <div style={css("display:flex;gap:16px;font-size:12px;color:#5C5C5C;flex-wrap:wrap")}>
                       <span style={css("display:flex;align-items:center;gap:6px")}><i style={css("width:10px;height:10px;border-radius:50%;background:#1E9BF0;display:inline-block")}></i>Despacho</span>
                       <span style={css("display:flex;align-items:center;gap:6px")}><i style={css("width:10px;height:10px;border-radius:50%;background:#1E1EB4;display:inline-block")}></i>Producción</span>
                     </div>
-                    <div style={css("display:flex;align-items:flex-end;gap:clamp(6px,2vw,16px);height:clamp(200px,32vh,300px);overflow-x:auto;padding-bottom:4px")}>
+                    <div style={css("display:flex;align-items:flex-end;gap:clamp(6px,2vw,16px);flex:1;min-height:170px;overflow-x:auto;padding-bottom:4px")}>
                       {vm.serie.map((s, i) => (
                         <div key={i} style={css("flex:1 1 0;min-width:46px;display:flex;flex-direction:column;justify-content:flex-end;height:100%;gap:6px")}>
                           <div style={css("flex:1;display:flex;align-items:flex-end;gap:3px")}>
@@ -1048,7 +1147,7 @@ class App extends Component {
                   </div>
                   <div style={css("background:#fff;border:1px solid #E1E1E1;border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:14px")}>
                     <div style={css("font-size:16px;font-weight:600")}>Acopio (tn)</div>
-                    <div style={css("height:clamp(180px,28vh,260px);position:relative")}>
+                    <div style={css("flex:1;min-height:150px;position:relative")}>
                       <svg viewBox="0 0 320 160" preserveAspectRatio="none" style={css("width:100%;height:100%;display:block")}>
                         <line x1="0" y1="80" x2="320" y2="80" stroke="#BFE0FA" strokeWidth="1" strokeDasharray="5 5" vectorEffect="non-scaling-stroke"></line>
                         <polyline points={vm.acopioPts} fill="none" stroke="#1E9BF0" strokeWidth="2.5" vectorEffect="non-scaling-stroke"></polyline>
@@ -1077,33 +1176,51 @@ class App extends Component {
                 <button onClick={vm.goDetalle} className="hov-dark" style={css("min-height:48px;border:none;border-radius:8px;color:#fff;font-size:15px;font-weight:600;cursor:pointer;text-align:left;padding:0 18px")}>→ Detalle de producción</button>
                 <button onClick={vm.goKpiAluv} className="hov-dark" style={css("min-height:48px;border:none;border-radius:8px;color:#fff;font-size:15px;font-weight:600;cursor:pointer;text-align:left;padding:0 18px")}>→ KPIs Aluvional</button>
               </div>
+              </div>
             </>
           )}
 
           {vm.isDetalle && (
             <>
-              <div style={css("background:#fff;border:1px solid #E1E1E1;border-radius:10px;overflow:auto")}>
-                <div style={css("min-width:520px")}>
-                  <div style={css("display:grid;grid-template-columns:1.1fr 1fr 1fr 1fr;gap:0;border-bottom:2px solid #1370C4;padding:12px 14px;font-size:13px;font-weight:600;color:#3A3A3A;position:sticky;top:0;background:#fff")}>
-                    <div>Fecha</div><div style={css("text-align:right")}>Producción</div><div style={css("text-align:right")}>Despacho</div><div style={css("text-align:right")}>Acopio</div>
-                  </div>
-                  {vm.tabla.map((r, i) => (
-                    <div key={i} style={css(`display:grid;grid-template-columns:1.1fr 1fr 1fr 1fr;padding:12px 14px;border-bottom:1px solid #F0F0F0;font-size:14px;background:${r.zebra}`)}>
-                      <div>{r.fecha}</div>
-                      <div style={css("text-align:right;font-variant-numeric:tabular-nums")}>{r.prod}</div>
-                      <div style={css("text-align:right;font-variant-numeric:tabular-nums")}>{r.desp}</div>
-                      <div style={css(`text-align:right;font-variant-numeric:tabular-nums;font-weight:600;color:${r.color}`)}>{r.acopio}</div>
+              <div style={css("background:#fff;border:1px solid #E1E1E1;border-radius:10px;padding:14px;display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px 14px")}>
+                <label style={css("display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:600;color:#5C5C5C")}>Período desde
+                  <input type="date" value={vm.desde} onChange={vm.setDesde} style={css("width:100%;padding:11px 12px;border:1px solid #D9D9D9;border-radius:8px;font-size:15px;background:#F7F7F7")} />
+                </label>
+                <label style={css("display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:600;color:#5C5C5C")}>Período hasta
+                  <input type="date" value={vm.hasta} onChange={vm.setHasta} style={css("width:100%;padding:11px 12px;border:1px solid #D9D9D9;border-radius:8px;font-size:15px;background:#F7F7F7")} />
+                </label>
+                <label style={css("display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:600;color:#5C5C5C")}>Turno
+                  <select value={vm.turno} onChange={vm.setTurno} style={css("width:100%;padding:11px 12px;border:1px solid #D9D9D9;border-radius:8px;font-size:15px;background:#F7F7F7")}>
+                    <option value="Todas">Todas</option>
+                    <option value="Turno A">Turno A</option>
+                    <option value="Turno B">Turno B</option>
+                  </select>
+                </label>
+              </div>
+              <div style={css(`display:flex;flex-direction:column;gap:8px;height:${vm.tableroBodyMinHeight}px`)}>
+                <div style={css("background:#fff;border:1px solid #E1E1E1;border-radius:10px;overflow:auto;flex:1")}>
+                  <div style={css("min-width:520px")}>
+                    <div style={css("display:grid;grid-template-columns:1.1fr 1fr 1fr 1fr;gap:0;border-bottom:2px solid #1370C4;padding:12px 14px;font-size:13px;font-weight:600;color:#3A3A3A;position:sticky;top:0;background:#fff")}>
+                      <div>Fecha</div><div style={css("text-align:right")}>Producción</div><div style={css("text-align:right")}>Despacho</div><div style={css("text-align:right")}>Acopio</div>
                     </div>
-                  ))}
-                  <div style={css("display:grid;grid-template-columns:1.1fr 1fr 1fr 1fr;padding:14px;font-size:15px;font-weight:700;background:#FAFAFA;border-top:2px solid #111")}>
-                    <div>Total</div>
-                    <div style={css("text-align:right")}>{vm.kProd}</div>
-                    <div style={css("text-align:right")}>{vm.kDesp}</div>
-                    <div style={css("text-align:right")}>{vm.kAcopio}</div>
+                    {vm.tabla.map((r, i) => (
+                      <div key={i} style={css(`display:grid;grid-template-columns:1.1fr 1fr 1fr 1fr;padding:12px 14px;border-bottom:1px solid #F0F0F0;font-size:14px;background:${r.zebra}`)}>
+                        <div>{r.fecha}</div>
+                        <div style={css("text-align:right;font-variant-numeric:tabular-nums")}>{r.prod}</div>
+                        <div style={css("text-align:right;font-variant-numeric:tabular-nums")}>{r.desp}</div>
+                        <div style={css(`text-align:right;font-variant-numeric:tabular-nums;font-weight:600;color:${r.color}`)}>{r.acopio}</div>
+                      </div>
+                    ))}
+                    <div style={css("display:grid;grid-template-columns:1.1fr 1fr 1fr 1fr;padding:14px;font-size:15px;font-weight:700;background:#FAFAFA;border-top:2px solid #111;position:sticky;bottom:0")}>
+                      <div>Total</div>
+                      <div style={css("text-align:right")}>{vm.kProd}</div>
+                      <div style={css("text-align:right")}>{vm.kDesp}</div>
+                      <div style={css("text-align:right")}>{vm.kAcopio}</div>
+                    </div>
                   </div>
                 </div>
+                <div style={css("flex:none;font-size:13px;color:#6B6B6B")}>Acopio en verde: producción por encima del despacho. En rojo: días sin producción registrada.</div>
               </div>
-              <div style={css("font-size:13px;color:#6B6B6B")}>Acopio en verde: producción por encima del despacho. En rojo: días sin producción registrada.</div>
             </>
           )}
 
@@ -1124,6 +1241,7 @@ class App extends Component {
                   </select>
                 </label>
               </div>
+              <div ref={this.setKpiAluvBodyRef} style={css("display:flex;flex-direction:column;gap:12px")}>
               <div style={css("display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px")}>
                 <div style={css("background:#fff;border:1px solid #E1E1E1;border-radius:10px;padding:18px;text-align:center")}>
                   <div style={css("font-size:clamp(32px,7vw,44px);font-weight:300;line-height:1")}>{vm.kDesp}</div>
@@ -1210,7 +1328,7 @@ class App extends Component {
                       </button>
                     </div>
                     <div style={css("height:clamp(170px,26vh,240px)")}>
-                      <DespachosChart data={vm.despachoSerie} height="100%" />
+                      <DespachosChart data={vm.despachoSerie} dayTicks={vm.despachoDayTicks} height="100%" />
                     </div>
                   </div>
                   <div style={css("background:#fff;border:1px solid #E1E1E1;border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:12px")}>
@@ -1227,7 +1345,7 @@ class App extends Component {
                       <div style={css("padding:24px 0;text-align:center;font-size:14px;color:#7A7A7A")}>Sin cargas registradas.</div>
                     ) : (
                       <div style={css("height:clamp(170px,26vh,240px)")}>
-                        <CargaDiaChart data={vm.cargaDiaSerie} average={vm.cargaDiaAvg} height="100%" />
+                        <CargaDiaChart data={vm.cargaDiaSerie} target={OBJETIVO_CARGA_DIA_TN} height="100%" />
                       </div>
                     )}
                   </div>
@@ -1236,6 +1354,7 @@ class App extends Component {
               <div style={css("display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px")}>
                 <button onClick={vm.goDetalleCargas} className="hov-dark" style={css("min-height:48px;border:none;border-radius:8px;color:#fff;font-size:15px;font-weight:600;cursor:pointer;text-align:left;padding:0 18px")}>→ Detalle de cargas</button>
                 <button onClick={vm.goViajes} className="hov-dark" style={css("min-height:48px;border:none;border-radius:8px;color:#fff;font-size:15px;font-weight:600;cursor:pointer;text-align:left;padding:0 18px")}>→ Detalle de viajes</button>
+              </div>
               </div>
             </>
           )}
@@ -1257,7 +1376,7 @@ class App extends Component {
                   </select>
                 </label>
               </div>
-              <div style={css("background:#fff;border:1px solid #E1E1E1;border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:14px")}>
+              <div style={css(`background:#fff;border:1px solid #E1E1E1;border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:14px;height:${vm.tableroBodyMinHeight}px`)}>
                 <div>
                   <div style={css("font-size:17px;font-weight:600")}>Viajes</div>
                   <div style={css("font-size:13px;color:#6B6B6B")}>Detalle de viajes por día</div>
@@ -1267,45 +1386,53 @@ class App extends Component {
                   <span style={css("display:flex;align-items:center;gap:6px")}><i style={css("width:10px;height:10px;border-radius:50%;background:#2A2A2A;display:inline-block")}></i>Fin de semana</span>
                 </div>
                 {vm.sinViajes ? (
-                  <div style={css("padding:24px 0;text-align:center;font-size:14px;color:#7A7A7A")}>Sin viajes registrados en el período seleccionado.</div>
+                  <div style={css("flex:1;display:flex;align-items:center;justify-content:center;text-align:center;font-size:14px;color:#7A7A7A")}>Sin viajes registrados en el período seleccionado.</div>
                 ) : (
-                  <>
-                    <div style={css("position:relative;height:clamp(220px,38vh,340px);display:flex;align-items:flex-end;gap:2px;padding-bottom:2px")}>
-                      <div style={css("position:absolute;left:0;right:0;bottom:33%;border-top:1px dashed #6EB8F0;pointer-events:none")}></div>
-                      {vm.viajesBars.map((v, i) => (
-                        <div key={i} title={v.label} style={css(`flex:1 1 0;min-width:2px;height:${v.h};background:${v.color};border-radius:1px`)}></div>
-                      ))}
-                    </div>
-                    <div style={css("display:flex;justify-content:space-between;font-size:11px;color:#6B6B6B")}>
-                      <span>{vm.viajesLabelInicio}</span><span>{vm.viajesLabelMedio}</span><span>{vm.viajesLabelFin}</span>
-                    </div>
-                  </>
+                  <div style={css("flex:1;min-height:170px")}>
+                    <ViajesChart data={vm.viajesSerie} referencia={vm.viajesReferencia} height="100%" />
+                  </div>
                 )}
-                <div style={css("font-size:12px;color:#7A7A7A")}>Línea de referencia: 50 viajes/día</div>
               </div>
             </>
           )}
 
           {vm.isDetalleCargas && (
-            <div style={css("background:#fff;border:1px solid #E1E1E1;border-radius:10px;overflow:auto")}>
-              <div style={css("min-width:640px")}>
-                <div style={css("display:grid;grid-template-columns:1fr 1.1fr .9fr 1.4fr .9fr;padding:12px 14px;border-bottom:2px solid #1370C4;font-size:13px;font-weight:600;color:#3A3A3A;position:sticky;top:0;background:#fff")}>
-                  <div>Fecha y hora</div><div>Nro de Guía</div><div>Turno</div><div>Cargado por</div><div style={css("text-align:right")}>Suma de Carga (tn)</div>
-                </div>
-                {vm.sinCargas && (
-                  <div style={css("padding:24px 14px;text-align:center;font-size:14px;color:#7A7A7A")}>Sin cargas registradas en el período seleccionado.</div>
-                )}
-                {vm.cargas.map((c, i) => (
-                  <div key={i} style={css(`display:grid;grid-template-columns:1fr 1.1fr .9fr 1.4fr .9fr;padding:11px 14px;border-bottom:1px solid #F0F0F0;font-size:14px;background:${c.zebra}`)}>
-                    <div>{c.fecha}</div><div>{c.guia}</div><div>{c.turno}</div><div>{c.cargadoPor}</div>
-                    <div style={css("text-align:right;font-variant-numeric:tabular-nums")}>{c.carga}</div>
+            <>
+              <div style={css("background:#fff;border:1px solid #E1E1E1;border-radius:10px;padding:14px;display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px 14px")}>
+                <label style={css("display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:600;color:#5C5C5C")}>Período desde
+                  <input type="date" value={vm.desde} onChange={vm.setDesde} style={css("width:100%;padding:11px 12px;border:1px solid #D9D9D9;border-radius:8px;font-size:15px;background:#F7F7F7")} />
+                </label>
+                <label style={css("display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:600;color:#5C5C5C")}>Período hasta
+                  <input type="date" value={vm.hasta} onChange={vm.setHasta} style={css("width:100%;padding:11px 12px;border:1px solid #D9D9D9;border-radius:8px;font-size:15px;background:#F7F7F7")} />
+                </label>
+                <label style={css("display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:600;color:#5C5C5C")}>Turno
+                  <select value={vm.turno} onChange={vm.setTurno} style={css("width:100%;padding:11px 12px;border:1px solid #D9D9D9;border-radius:8px;font-size:15px;background:#F7F7F7")}>
+                    <option value="Todas">Todas</option>
+                    <option value="Turno A">Turno A</option>
+                    <option value="Turno B">Turno B</option>
+                  </select>
+                </label>
+              </div>
+              <div style={css(`background:#fff;border:1px solid #E1E1E1;border-radius:10px;overflow:auto;height:${vm.tableroBodyMinHeight}px`)}>
+                <div style={css("min-width:640px")}>
+                  <div style={css("display:grid;grid-template-columns:1fr 1.1fr .9fr 1.4fr .9fr;padding:12px 14px;border-bottom:2px solid #1370C4;font-size:13px;font-weight:600;color:#3A3A3A;position:sticky;top:0;background:#fff")}>
+                    <div>Fecha y hora</div><div>Nro de Guía</div><div>Turno</div><div>Cargado por</div><div style={css("text-align:right")}>Suma de Carga (tn)</div>
                   </div>
-                ))}
-                <div style={css("display:grid;grid-template-columns:1fr 1.1fr .9fr 1.4fr .9fr;padding:14px;font-size:15px;font-weight:700;background:#FAFAFA;border-top:2px solid #111")}>
-                  <div>Total</div><div></div><div></div><div></div><div style={css("text-align:right")}>{vm.kDesp}</div>
+                  {vm.sinCargas && (
+                    <div style={css("padding:24px 14px;text-align:center;font-size:14px;color:#7A7A7A")}>Sin cargas registradas en el período seleccionado.</div>
+                  )}
+                  {vm.cargas.map((c, i) => (
+                    <div key={i} style={css(`display:grid;grid-template-columns:1fr 1.1fr .9fr 1.4fr .9fr;padding:11px 14px;border-bottom:1px solid #F0F0F0;font-size:14px;background:${c.zebra}`)}>
+                      <div>{c.fecha}</div><div>{c.guia}</div><div>{c.turno}</div><div>{c.cargadoPor}</div>
+                      <div style={css("text-align:right;font-variant-numeric:tabular-nums")}>{c.carga}</div>
+                    </div>
+                  ))}
+                  <div style={css("display:grid;grid-template-columns:1fr 1.1fr .9fr 1.4fr .9fr;padding:14px;font-size:15px;font-weight:700;background:#FAFAFA;border-top:2px solid #111;position:sticky;bottom:0")}>
+                    <div>Total</div><div></div><div></div><div></div><div style={css("text-align:right")}>{vm.kDesp}</div>
+                  </div>
                 </div>
               </div>
-            </div>
+            </>
           )}
 
           {vm.isDespachosFocus && (
@@ -1321,7 +1448,7 @@ class App extends Component {
                 </div>
               </div>
               <div style={css("height:clamp(320px,60vh,520px)")}>
-                <DespachosChart data={vm.despachoSerie} height="100%" />
+                <DespachosChart data={vm.despachoSerie} dayTicks={vm.despachoDayTicks} height="100%" />
               </div>
             </div>
           )}
@@ -1342,14 +1469,14 @@ class App extends Component {
                 <div style={css("padding:40px 0;text-align:center;font-size:14px;color:#7A7A7A")}>Sin cargas registradas.</div>
               ) : (
                 <div style={css("height:clamp(320px,60vh,520px)")}>
-                  <CargaDiaChart data={vm.cargaDiaSerie} average={vm.cargaDiaAvg} height="100%" />
+                  <CargaDiaChart data={vm.cargaDiaSerie} target={OBJETIVO_CARGA_DIA_TN} height="100%" />
                 </div>
               )}
             </div>
           )}
 
           {(vm.isTablero || vm.isFocusScreen) && (
-            <div style={css("display:flex;align-items:center;justify-content:center;gap:14px;padding:6px 0 2px")}>
+            <div style={css("position:sticky;bottom:61px;z-index:15;display:flex;align-items:center;justify-content:center;gap:14px;padding:8px 0;background:#ECECEC;box-shadow:0 -6px 10px -6px rgba(0,0,0,.12)")}>
               <button onClick={vm.isFocusScreen ? vm.focusPrevPage : vm.prevPage} aria-label="Página anterior" className="hov-round" style={css("width:40px;height:40px;border-radius:50%;border:1px solid #D5D5D5;color:#333;font-size:17px;cursor:pointer")}>‹</button>
               <div style={css("font-size:14px;color:#4A4A4A;min-width:70px;text-align:center")}>{vm.isFocusScreen ? vm.focusPagerLabel : vm.pagerLabel}</div>
               <button onClick={vm.isFocusScreen ? vm.focusNextPage : vm.nextPage} aria-label="Página siguiente" className="hov-round" style={css("width:40px;height:40px;border-radius:50%;border:1px solid #D5D5D5;color:#333;font-size:17px;cursor:pointer")}>›</button>

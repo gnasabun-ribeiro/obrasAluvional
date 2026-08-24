@@ -18,18 +18,30 @@ create table if not exists aluvional.despachos (
 create table if not exists aluvional.produccion (
   id bigint generated always as identity primary key,
   fecha date not null,
-  hora text not null default '00:00',
   turno text not null,
-  lts numeric not null default 0,
+  lts numeric,
+  clima text,
+  b1 numeric,
+  b2 numeric,
+  b3 numeric,
   created_at timestamptz not null default now()
 );
 
--- Migración: agrega la columna "hora" si la tabla ya existía sin ella
--- (habilita el filtro por hora en Registro de producción).
-alter table aluvional.produccion add column if not exists hora text not null default '00:00';
-
 -- Migración: elimina la columna "hs" (horas de máquina), ya no se usa.
 alter table aluvional.produccion drop column if exists hs;
+
+-- Migración: agrega clima y minutos por balde (3 tomas), que el formulario
+-- "Nueva carga de producción" ya captura pero no se guardaban.
+alter table aluvional.produccion add column if not exists clima text;
+alter table aluvional.produccion add column if not exists b1 numeric;
+alter table aluvional.produccion add column if not exists b2 numeric;
+alter table aluvional.produccion add column if not exists b3 numeric;
+
+-- Migración: "lts" (combustible) pasa a ser opcional.
+alter table aluvional.produccion alter column lts drop not null;
+
+-- Migración: elimina "hora" (no se usa en producción; el turno alcanza).
+alter table aluvional.produccion drop column if exists hora;
 
 -- Novedades CMASS: un texto de novedad por día
 create table if not exists aluvional.novedades_cmass (

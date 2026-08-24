@@ -22,7 +22,7 @@ function PeakLabel({ x, y, width, value, index, data }) {
   );
 }
 
-export default function CargaDiaChart({ data, average, height }) {
+export default function CargaDiaChart({ data, target, height }) {
   return (
     <ResponsiveContainer width="100%" height={height}>
       <BarChart data={data} margin={{ top: 18, right: 8, left: 0, bottom: 0 }}>
@@ -30,7 +30,7 @@ export default function CargaDiaChart({ data, average, height }) {
         <XAxis dataKey="dia" tick={{ fontSize: 11, fill: "#6B6B6B" }} minTickGap={24} axisLine={{ stroke: "#E1E1E1" }} tickLine={false} />
         <YAxis width={42} tick={{ fontSize: 11, fill: "#6B6B6B" }} axisLine={false} tickLine={false} />
         <Tooltip content={<CargaDiaTooltip />} cursor={{ fill: "#FFF6DB" }} />
-        <ReferenceLine y={average} stroke="#3FA34D" strokeWidth={2} strokeDasharray="6 4" />
+        <ReferenceLine y={target} stroke="#3FA34D" strokeWidth={2} strokeDasharray="6 4" />
         <Bar dataKey="tn" fill="#FFC800" radius={[1, 1, 0, 0]} minPointSize={2} isAnimationActive={false}>
           <LabelList dataKey="tn" content={(props) => <PeakLabel {...props} data={data} />} />
         </Bar>

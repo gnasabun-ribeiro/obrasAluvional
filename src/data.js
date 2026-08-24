@@ -24,4 +24,4 @@ export const TABLERO = ["kpiAluv", "viajes", "detalleCargas", "kpiProd", "detall
 
 // Objetivos de carga (valores ideales de referencia para los KPIs de Aluvional).
 export const OBJETIVO_PROMEDIO_CARGA_TN = 45;
-export const OBJETIVO_TOTAL_CARGA_TN = 43000;
+export const OBJETIVO_CARGA_DIA_TN = 3150;
